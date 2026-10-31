@@ -41,6 +41,10 @@ check() {
 	fi
 }
 
+# 0. Sourcing stops zsh's list bell — terminals render it as a beep or, with a
+# visual bell, a screen flash on every Tab that lists.
+check "bell: listbeep off after source" 0 $([[ -o listbeep ]] && print 1 || print 0)
+
 # 1. The program is the first word that is neither a wrapper nor VAR=value.
 words=(git push '')
 CURRENT=3

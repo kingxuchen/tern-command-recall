@@ -668,6 +668,12 @@ if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --install ]]; then
   exit 0
 fi
 
+# zsh rings its bell whenever it displays a completion list (LIST_BEEP); with a
+# visual bell the terminal renders that as a screen flash on the first Tab. This
+# plugin adds a group to every completion, so that bell fires constantly. Turn it
+# off: the list, the menu and the ranking are untouched, only the bell goes away.
+unsetopt listbeep
+
 # Register hooks once.
 typeset -ga preexec_functions precmd_functions
 if (( ${preexec_functions[(Ie)_tern_recall_preexec]} == 0 )); then
