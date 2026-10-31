@@ -1,0 +1,9 @@
+schema = 1
+
+id = "command-recall"
+name = "Command Recall"
+version = "0.1.0"
+description = "Learns the arguments you actually use and leads Tab's list with them, ranked by frequency, recency and exit status."
+icon = "sparkle"
+host = "host.luau"
+window = "window.luau"
