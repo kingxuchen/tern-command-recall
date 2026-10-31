@@ -7,10 +7,10 @@
 ```
 $ agy ·Tab·
 ┌─ 常用参数 ─────────────────────────────┐
-│ --dangerously-skip-permissions  用了 2 次 · 今天 │
-│ --model                         用了 1 次 · 今天 │
+│ --dangerously-skip-permissions           │
+│ --model                                  │
 ├─ 普通补全 ─────────────────────────────┤
-│ bin/   README.md   src/                          │
+│ bin/   README.md   src/                  │
 └────────────────────────────────────────┘
 ```
 

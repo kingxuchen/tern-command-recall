@@ -31,7 +31,7 @@ typeset -ga _tern_recall_wrappers
 typeset -ga _tern_recall_keywords
 typeset -ga _tern_recall_splits
 typeset -gi _tern_recall_at
-typeset -ga _tern_recall_tok _tern_recall_say _tern_recall_completers
+typeset -ga _tern_recall_tok _tern_recall_completers
 typeset -g _tern_recall_started=''
 
 _tern_recall_wrappers=(sudo env time nice nohup command exec caffeinate doas)
@@ -369,14 +369,12 @@ _tern_recall_context() {
   REPLY=${(j: :)pre}
 }
 
-# The stored rows of one context, into $_tern_recall_tok / $_tern_recall_say,
-# best first. Fails when the file has none for this context. A word already on
-# the line is not offered again.
+# The stored rows of one context, into $_tern_recall_tok, best first. Fails when
+# the file has none for this context. A word already on the line is not offered
+# again. Rows carry no description: the list shows the words alone.
 _tern_recall_rows() {
   _tern_recall_tok=()
-  _tern_recall_say=()
   local file=$1 context=$2
-  local -i now=${3:-$EPOCHSECONDS}
   [[ -r $file ]] || return 1
   local -a typed
   local i
@@ -385,19 +383,11 @@ _tern_recall_rows() {
       typed+=$words[i]
     done
   fi
-  local row_tok row_uses row_fails row_ts row_score row_ctx age_txt
-  local -i days
+  local row_tok row_uses row_fails row_ts row_score row_ctx
   while IFS=$'\t' read -r row_tok row_uses row_fails row_ts row_score row_ctx; do
     [[ $row_ctx == "$context" && -n $row_tok ]] || continue
     (( ${typed[(Ie)$row_tok]} == 0 )) || continue
-    days=$(( (now - row_ts) / 86400 ))
-    if (( days <= 0 )); then
-      age_txt='今天'
-    else
-      age_txt="${days} 天前"
-    fi
     _tern_recall_tok+=$row_tok
-    _tern_recall_say+="${row_tok} -- 用了 ${row_uses} 次 · ${age_txt}"
   done <$file
   (( ${#_tern_recall_tok[@]} ))
 }
@@ -459,7 +449,7 @@ _tern_recall() {
   if [[ ${TERN_COMPLETE-} != 1 ]]; then
     heading='%F{6}── 常用参数 ──%f'
   fi
-  compadd -V tern-recall -X "$heading" -d _tern_recall_say -a _tern_recall_tok
+  compadd -V tern-recall -X "$heading" -a _tern_recall_tok
   return 1
 }
 

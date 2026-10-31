@@ -123,7 +123,7 @@ _tern_recall_program
 _tern_recall_context
 check "context: skips -C and its path" status "$REPLY"
 
-# 4. Rows come back in stored (score) order, with a plain-language explanation.
+# 4. Rows come back in stored (score) order, as bare words.
 words=(git push '')
 CURRENT=3
 _tern_recall_program
@@ -132,7 +132,6 @@ _tern_recall_rows "$TERN_RECALL_DIR/learned/git" "$REPLY"
 check "rows: count" 2 ${#_tern_recall_tok[@]}
 check "rows: first" origin "${_tern_recall_tok[1]}"
 check "rows: second" --force-with-lease "${_tern_recall_tok[2]}"
-check "rows: says" "origin -- 用了 2 次 · 今天" "${_tern_recall_say[1]}"
 
 words=(git '')
 CURRENT=2
@@ -157,7 +156,6 @@ _tern_recall_program
 _tern_recall_context
 _tern_recall_rows "$TERN_RECALL_DIR/learned/ls" "$REPLY"
 check "rows: flags are learned too" "-la" "${_tern_recall_tok[1]}"
-check "rows: age in days" "-la -- 用了 1 次 · 3 天前" "${_tern_recall_say[1]}"
 
 # 4b. Namespaced script names build the context, and a typed word is not re-offered.
 words=(pnpm test:web --reporter '')
@@ -192,7 +190,7 @@ typeset -ga _tern_cmp_hit _tern_cmp_w _tern_cmp_d _tern_cmp_g _tern_cmp_k _tern_
 typeset -gA compstate
 _tern_cmp_hit=(commit commit copy-ignored)
 _tern_cmp_w=(commit commit copy-ignored)
-_tern_cmp_d=('用了 105 次 · 今天' 'Stage and commit' 'Copy gitignored')
+_tern_cmp_d=('' 'Stage and commit' 'Copy gitignored')
 _tern_cmp_g=(0 1 1)
 _tern_cmp_k=(other value value)
 _tern_cmp_s=('' '' '')
@@ -200,14 +198,14 @@ _tern_cmp_c=(1 2 2)
 compstate=(list 'ambiguous ' insert 'automenu-unambiguous')
 _tern_recall_post
 check "dedup: keeps unique words in order" "commit copy-ignored" "${(j: :)_tern_cmp_w[@]}"
-check "dedup: keeps learned description" "用了 105 次 · 今天" "${_tern_cmp_d[1]}"
+check "dedup: learned row keeps no description" "" "${_tern_cmp_d[1]}"
 check "dedup: upgrades kind from _complete" "value" "${_tern_cmp_k[1]}"
 check "dedup: leaves insert alone when >1 unique match" "automenu-unambiguous" "${compstate[insert]}"
 
 # Single unique match across both groups collapses to 1 match and inserts once.
 _tern_cmp_hit=(commit commit)
 _tern_cmp_w=(commit commit)
-_tern_cmp_d=('用了 105 次 · 今天' 'Stage and commit')
+_tern_cmp_d=('' 'Stage and commit')
 _tern_cmp_g=(0 1)
 _tern_cmp_k=(other value)
 _tern_cmp_s=('' '')
@@ -289,8 +287,8 @@ words=(curl '')
 CURRENT=2
 _tern_recall_program
 _tern_recall_context
-_tern_recall_rows "$learn_tmp/learned/curl" "$REPLY" $now_ts
-check "hooks: preexec + failing precmd keeps uses=1" "--fail -- 用了 1 次 · 今天" "${_tern_recall_say[1]}"
+_tern_recall_rows "$learn_tmp/learned/curl" "$REPLY"
+check "hooks: preexec + failing precmd offers the flag" --fail "${_tern_recall_tok[1]}"
 local curl_line
 IFS= read -r curl_line < "$learn_tmp/learned/curl"
 check "hooks: failing precmd records fails=1 and epoch" $'--fail\t1\t1\t'"${now_ts}"$'\t0.4000\t' "$curl_line"
@@ -310,7 +308,7 @@ words=(rg '')
 CURRENT=2
 _tern_recall_program
 _tern_recall_context
-_tern_recall_rows "$hist_tmp/learned/rg" "$REPLY" $now_ts
+_tern_recall_rows "$hist_tmp/learned/rg" "$REPLY"
 check "history: imports and ranks recent higher than undated" "--hidden --files --smart-case" "${(j: :)_tern_recall_tok[@]}"
 check "history: writes history-imported marker" "3 commands" "$(<$hist_tmp/history-imported)"
 
@@ -336,8 +334,10 @@ words=(cargo '')
 CURRENT=2
 _tern_recall_program
 _tern_recall_context
-_tern_recall_rows "$hist_tmp/learned/cargo" "$REPLY" $now_ts
-check "flock: concurrent writers preserve all 20 uses" "--release -- 用了 20 次 · 今天" "${_tern_recall_say[1]}"
+_tern_recall_rows "$hist_tmp/learned/cargo" "$REPLY"
+local cargo_tok cargo_uses
+IFS=$'\t' read -r cargo_tok cargo_uses _ < "$hist_tmp/learned/cargo"
+check "flock: concurrent writers keep one row with all 20 uses" "--release 20" "$cargo_tok $cargo_uses"
 
 # 12. `.zshrc' installer: appends safely with backup, is idempotent, upgrades legacy block, and preserves symlinks.
 rc_tmp=$(mktemp -d)
