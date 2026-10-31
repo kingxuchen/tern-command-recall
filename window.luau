@@ -35,18 +35,11 @@ local function readRows(program, limit)
 	local rows = {}
 	local text = tern.fs.read(path, 400000)
 	for line in string.gmatch(text, "([^\n]+)") do
-		local token, uses, _, ts, _, context = string.match(
-			line,
-			"^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$"
-		)
+		local token, context = string.match(line, "^([^\t]*)\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t(.*)$")
 		if token and token ~= "" then
-			local lastUsed = tonumber(ts) or 0
-			local days = math.max(0, math.floor((os.time() - lastUsed) / 86400))
-			local ageText = (days == 0) and "今天" or string.format("%d 天前", days)
 			table.insert(rows, {
 				token = token,
 				context = context or "",
-				detail = string.format("用了 %s 次 · %s", uses, ageText),
 				line = program .. (context ~= "" and (" " .. context) or "") .. " " .. token,
 			})
 			if limit and #rows >= limit then
@@ -96,7 +89,7 @@ tern.command({
 			end
 			local picks = {}
 			for _, row in readRows(chosen.label, PICK_ROWS) do
-				table.insert(picks, { label = row.line, detail = row.detail, insert = row.line })
+				table.insert(picks, { label = row.line, insert = row.line })
 			end
 			if #picks == 0 then
 				return

@@ -314,7 +314,7 @@ check "history: writes history-imported marker" "3 commands" "$(<$hist_tmp/histo
 
 # 10. `recall' CLI inspector works in any terminal.
 check "recall cli: lists program summary" $'rg\t--hidden  --files  --smart-case' "$(recall --list)"
-check "recall cli: inspects single program" $'rg --hidden\t用了 2 次 · 今天' "${"$(recall rg)"%%$'\n'*}"
+check "recall cli: inspects single program" 'rg --hidden' "${"$(recall rg)"%%$'\n'*}"
 
 # 11. Concurrent panes learning the same program keep every update via flock.
 (

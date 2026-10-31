@@ -91,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/kingxuchen/tern-command-recall/main
 
 ```zsh
 recall            # 若装有 fzf 则弹出交互式选择器并直接填入命令行；否则列出所有已学程序
-recall git        # 查看 git 已学的全部高频参数与使用次数
+recall git        # 查看 git 已学的高频参数（按频率与最近使用排序，不显示次数和日期）
 recall --list     # 纯文本列出所有已学程序及前 3 个常用参数
 recall --install  # 手动触发安全写入 ~/.zshrc
 ```

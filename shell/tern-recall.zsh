@@ -473,18 +473,16 @@ recall() {
       builtin print -ru2 -- "recall: 还没有学到 $prog 的参数"
       return 1
     }
-    local r_tok r_u r_f r_ts r_score r_ctx line_cmd age_txt
-    local -i n=0 days now=$EPOCHSECONDS
+    local r_tok r_u r_f r_ts r_score r_ctx line_cmd
+    local -i n=0
     while IFS=$'\t' read -r r_tok r_u r_f r_ts r_score r_ctx; do
       [[ -n $r_tok ]] || continue
-      days=$(( (now - r_ts) / 86400 ))
-      (( days <= 0 )) && age_txt='今天' || age_txt="${days} 天前"
       if [[ -n $r_ctx ]]; then
         line_cmd="$prog $r_ctx $r_tok"
       else
         line_cmd="$prog $r_tok"
       fi
-      builtin printf "%s\t用了 %s 次 · %s\n" "$line_cmd" "$r_u" "$age_txt"
+      builtin print -r -- "$line_cmd"
       (( ++n >= 40 )) && break
     done < "$file"
     return 0
@@ -515,8 +513,7 @@ recall() {
     chosen_prog=$(builtin print -rl -- "${summary[@]}" | fzf --delimiter=$'\t' --with-nth=1,2 --prompt="选一个命令 > ") || return 0
     chosen_prog=${chosen_prog%%$'\t'*}
     [[ -n $chosen_prog ]] || return 0
-    chosen_line=$(recall "$chosen_prog" | fzf --delimiter=$'\t' --with-nth=1,2 --prompt="插入这条命令 > ") || return 0
-    chosen_line=${chosen_line%%$'\t'*}
+    chosen_line=$(recall "$chosen_prog" | fzf --prompt="插入这条命令 > ") || return 0
     [[ -n $chosen_line ]] && builtin print -z -- "$chosen_line"
     return 0
   fi
