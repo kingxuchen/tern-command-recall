@@ -104,6 +104,48 @@ _tern_recall_rows() {
   (( ${#_tern_recall_tok[@]} ))
 }
 
+# Drops duplicate words that the later completers also added to Tern's list
+# (`_tern_cmp_*' in tern-complete), keeping our `常用参数' entry first. When
+# only one unique word matched across both groups, zsh would otherwise see two
+# identical matches, insert `"word "' (with its trailing space) as the
+# unambiguous prefix AND still open the popup, so confirming inserts the word a
+# second time.
+_tern_recall_post() {
+  (( ${+_tern_cmp_w} && $#_tern_cmp_w > 1 )) || return 0
+  local -A seen
+  local -a hit w d g k s c
+  local i j word
+  for (( i = 1; i <= $#_tern_cmp_w; i++ )); do
+    word=${_tern_cmp_w[i]}
+    if (( ${+seen[$word]} )); then
+      j=${seen[$word]}
+      [[ ${k[j]} == other && -n ${_tern_cmp_k[i]} ]] && k[j]=${_tern_cmp_k[i]}
+      [[ -z ${s[j]} && -n ${_tern_cmp_s[i]} ]] && s[j]=${_tern_cmp_s[i]}
+      continue
+    fi
+    hit+=("${_tern_cmp_hit[i]}")
+    w+=("$word")
+    d+=("${_tern_cmp_d[i]}")
+    g+=("${_tern_cmp_g[i]}")
+    k+=("${_tern_cmp_k[i]}")
+    s+=("${_tern_cmp_s[i]}")
+    c+=("${_tern_cmp_c[i]}")
+    seen[$word]=${#w}
+  done
+  _tern_cmp_hit=("${hit[@]}")
+  _tern_cmp_w=("${w[@]}")
+  _tern_cmp_d=("${d[@]}")
+  _tern_cmp_g=("${g[@]}")
+  _tern_cmp_k=("${k[@]}")
+  _tern_cmp_s=("${s[@]}")
+  _tern_cmp_c=("${c[@]}")
+  if (( $#_tern_cmp_w == 1 )); then
+    compstate[list]=''
+    compstate[insert]=1
+    [[ ${RBUFFER-} == ' '* ]] || compstate[insert]+=' '
+  fi
+}
+
 # The completer. Returns 1 even after adding matches, so the ordinary completers
 # still run underneath ours.
 _tern_recall() {
@@ -116,6 +158,8 @@ _tern_recall() {
 
   _tern_recall_context
   _tern_recall_rows "$TERN_RECALL_DIR/learned/$prog" "$REPLY" || return 1
+
+  (( ${+comppostfuncs} )) && comppostfuncs+=(_tern_recall_post)
 
   # -V keeps the stored score order instead of sorting alphabetically; -X becomes
   # the group's heading in Tern's list.

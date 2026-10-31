@@ -158,6 +158,38 @@ zstyle -a ':completion:*' completer completers
 check "register: idempotent" 3 ${#completers[@]}
 check "register: still one" 1 ${completers[(Ie)_tern_recall]}
 
+# 6. Deduplication across groups in Tern's completion arrays (_tern_cmp_*).
+typeset -ga _tern_cmp_hit _tern_cmp_w _tern_cmp_d _tern_cmp_g _tern_cmp_k _tern_cmp_s _tern_cmp_c
+typeset -gA compstate
+_tern_cmp_hit=(commit commit copy-ignored)
+_tern_cmp_w=(commit commit copy-ignored)
+_tern_cmp_d=('用了 105 次 · 今天' 'Stage and commit' 'Copy gitignored')
+_tern_cmp_g=(0 1 1)
+_tern_cmp_k=(other value value)
+_tern_cmp_s=('' '' '')
+_tern_cmp_c=(1 2 2)
+compstate=(list 'ambiguous ' insert 'automenu-unambiguous')
+_tern_recall_post
+check "dedup: keeps unique words in order" "commit copy-ignored" "${(j: :)_tern_cmp_w[@]}"
+check "dedup: keeps learned description" "用了 105 次 · 今天" "${_tern_cmp_d[1]}"
+check "dedup: upgrades kind from _complete" "value" "${_tern_cmp_k[1]}"
+check "dedup: leaves insert alone when >1 unique match" "automenu-unambiguous" "${compstate[insert]}"
+
+# Single unique match across both groups collapses to 1 match and inserts once.
+_tern_cmp_hit=(commit commit)
+_tern_cmp_w=(commit commit)
+_tern_cmp_d=('用了 105 次 · 今天' 'Stage and commit')
+_tern_cmp_g=(0 1)
+_tern_cmp_k=(other value)
+_tern_cmp_s=('' '')
+_tern_cmp_c=(1 2)
+compstate=(list 'ambiguous ' insert 'automenu-unambiguous')
+RBUFFER=''
+_tern_recall_post
+check "single unique: count is 1" 1 ${#_tern_cmp_w[@]}
+check "single unique: clears list" "" "${compstate[list]}"
+check "single unique: inserts first match once with space" "1 " "${compstate[insert]}"
+
 print -r -- ""
 if ((fails == 0)); then
 	print -r -- "all checks passed"
