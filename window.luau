@@ -1,19 +1,29 @@
--- command-recall, window half: what the memory looks like from the outside.
+-- command-recall, Tern window half: optional GUI picker over the shared shell
+-- memory (`$TERN_RECALL_DIR/learned/<program>`).
 --
--- The learning and the Tab list need nothing here — the daemon does the first
--- and zsh the second. This half only lets you look the memory in the face (a
--- picker over programs, then over the arguments learned for each) and copies the
--- one shell line that turns the feature on.
---
--- No status-line segment on purpose: Tern gives a chrome formatter 4 ms (40 ms
--- before it pauses the hook), and reading the store there is not worth the risk.
--- Everything here runs inside a command hook instead, where the budget is 50 ms
--- and the user asked for it.
+-- The zsh plugin (`shell/tern-recall.zsh`) is the sole learner and completer
+-- across every terminal (Ghostty, Tern, tty7, Otty, iTerm2). This file only
+-- exposes Tern command-palette shortcuts to inspect the shared store or copy
+-- the `.zshrc` source line.
 
-local DATA = tern.plugin.data
+local function dataDir()
+	local custom = tern.getenv("TERN_RECALL_DIR")
+	if custom and custom ~= "" then
+		return custom
+	end
+	local xdg = tern.getenv("XDG_DATA_HOME")
+	if xdg and xdg ~= "" then
+		return xdg .. "/command-recall"
+	end
+	local home = tern.getenv("HOME") or ""
+	return home .. "/.local/share/command-recall"
+end
+
+local DATA = dataDir()
 local LEARNED = DATA .. "/learned"
-local SHELL_LINE = '[ -n "$TERN_RECALL_DIR" ] && . "$TERN_RECALL_DIR/tern-recall.zsh"'
-
+local ZSHRC_MARK = DATA .. "/zshrc-configured"
+local SHELL_FILE = tern.plugin.dir .. "/shell/tern-recall.zsh"
+local SHELL_LINE = '[ -r "' .. SHELL_FILE .. '" ] && . "' .. SHELL_FILE .. '"'
 -- Rows one program shows in the picker.
 local PICK_ROWS = 40
 
@@ -25,16 +35,18 @@ local function readRows(program, limit)
 	local rows = {}
 	local text = tern.fs.read(path, 400000)
 	for line in string.gmatch(text, "([^\n]+)") do
-		local token, uses, _, age, _, context = string.match(
+		local token, uses, _, ts, _, context = string.match(
 			line,
 			"^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$"
 		)
 		if token and token ~= "" then
-			local days = string.match(age, "^(%d+)") or "0"
+			local lastUsed = tonumber(ts) or 0
+			local days = math.max(0, math.floor((os.time() - lastUsed) / 86400))
+			local ageText = (days == 0) and "今天" or string.format("%d 天前", days)
 			table.insert(rows, {
 				token = token,
 				context = context or "",
-				detail = string.format("用了 %s 次 · %s 天前", uses, days),
+				detail = string.format("用了 %s 次 · %s", uses, ageText),
 				line = program .. (context ~= "" and (" " .. context) or "") .. " " .. token,
 			})
 			if limit and #rows >= limit then
@@ -101,17 +113,37 @@ tern.command({
 	end,
 })
 
+local function installZshrc(notifyAlways)
+	tern.process.run({ "/bin/zsh", SHELL_FILE, "--install" }, { timeout_ms = 5000 }, function(res, cx)
+		if not cx then
+			return
+		end
+		local out = (res and res.stdout or "")
+		if string.match(out, "^installed") or string.match(out, "^upgraded") then
+			cx:toast(
+				"info",
+				"已自动写入 ~/.zshrc（已备份 ~/.zshrc.bak）",
+				"新开一个 Tab 即可在 Tern、Ghostty、tty7、Otty 等所有终端生效"
+			)
+		elseif notifyAlways then
+			cx:toast("info", "~/.zshrc 中已配置好 Command Recall", "无需重复注入，也已将加载命令复制到剪贴板")
+		end
+	end)
+end
+
+tern.on("window_start", function()
+	if not tern.fs.exists(ZSHRC_MARK) then
+		installZshrc(false)
+	end
+end)
+
 tern.command({
 	id = "install",
-	title = "Command Recall: 复制 shell 绑定",
+	title = "Command Recall: 写入 ~/.zshrc（全终端生效）",
 	icon = "sparkle",
 	group = "Command Recall",
 	run = function(cx)
 		cx:copy(SHELL_LINE)
-		cx:toast(
-			"info",
-			"已复制一行 shell 绑定",
-			"贴到 ~/.zshrc 末尾（compinit 之后），新开一个 Tab 生效"
-		)
+		installZshrc(true)
 	end,
 })

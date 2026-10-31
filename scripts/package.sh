@@ -33,14 +33,14 @@ TARGET_DIR="$STAGE_DIR/$PLUGIN_ID"
 mkdir -p "$TARGET_DIR"
 
 # Copy required files for the plugin
-cp -R plugin.toml common.luau host.luau window.luau README.md "$TARGET_DIR/"
-mkdir -p "$TARGET_DIR/shell"
+cp -R plugin.toml window.luau README.md tern-command-recall.plugin.zsh "$TARGET_DIR/"
+mkdir -p "$TARGET_DIR/shell" "$TARGET_DIR/scripts"
 cp shell/tern-recall.zsh "$TARGET_DIR/shell/"
+cp scripts/install.sh "$TARGET_DIR/scripts/"
 
 if [[ -f shell/test.zsh ]]; then
   cp shell/test.zsh "$TARGET_DIR/shell/"
 fi
-
 echo "📦 Packaging $PLUGIN_ID v$PLUGIN_VERSION..."
 
 # 1. Create .tar.gz

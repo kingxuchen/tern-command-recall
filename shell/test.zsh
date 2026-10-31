@@ -12,20 +12,21 @@ mkdir -p $tmp/learned
 row() {
 	print -r -- "${(j:	:)@}"
 }
-# Rows are `token \t uses \t fails \t age_days \t score \t context', best first —
+# Rows are `token \t uses \t fails \t last_used \t score \t context', best first —
 # the same shape the plugin writes. The empty context (a row for the first
 # argument) is the last column, so `read' keeps it.
+zmodload zsh/datetime
+now_ts=$EPOCHSECONDS
 {
-	row status 3 0 0.0 1.0000 ''
-	row commit 2 0 1.2 0.9000 ''
-	row origin 2 0 0.5 0.8000 push
-	row --force-with-lease 1 1 0.5 0.3200 push
-	row HEAD 1 0 0.5 0.7000 'push origin'
+	row status 3 0 $now_ts 1.0000 ''
+	row commit 2 0 $(( now_ts - 86400 )) 0.9000 ''
+	row origin 2 0 $now_ts 0.8000 push
+	row --force-with-lease 1 1 $now_ts 0.3200 push
+	row HEAD 1 0 $now_ts 0.7000 'push origin'
 } >$tmp/learned/git
-row up 1 0 0.1 0.5000 compose >$tmp/learned/docker
-row -la 1 0 3.0 0.4000 '' >$tmp/learned/ls
-row --silent 2 0 0.0 1.0000 'test:web' >$tmp/learned/pnpm
-
+row up 1 0 $now_ts 0.5000 compose >$tmp/learned/docker
+row -la 1 0 $(( now_ts - 3 * 86400 )) 0.4000 '' >$tmp/learned/ls
+row --silent 2 0 $now_ts 1.0000 'test:web' >$tmp/learned/pnpm
 export TERN_RECALL_DIR=$tmp
 source "$here/tern-recall.zsh"
 
@@ -189,6 +190,176 @@ _tern_recall_post
 check "single unique: count is 1" 1 ${#_tern_cmp_w[@]}
 check "single unique: clears list" "" "${compstate[list]}"
 check "single unique: inserts first match once with space" "1 " "${compstate[insert]}"
+
+# 7. Standalone shell learning (replaces the old Luau host selftest transcript).
+learn_tmp=$(mktemp -d)
+trap 'rm -rf $tmp $learn_tmp' EXIT
+TERN_RECALL_DIR=$learn_tmp
+
+_tern_recall_learn "git status --short" 0 0 1700000000
+_tern_recall_learn "git status --short" 0 0 1700000000
+_tern_recall_learn "git status" 0 0 1700000000
+_tern_recall_learn "git commit -m fix" 0 0 1700000000
+_tern_recall_learn "git commit -am fix" 0 0 1700000000
+_tern_recall_learn "git push origin HEAD" 0 0 1700000000
+_tern_recall_learn "git push --force-with-lease" 2 0 1700000000
+_tern_recall_learn "sudo git push origin main" 0 0 1700000000
+_tern_recall_learn "pnpm test:web --reporter dot" 0 0 1700000000
+_tern_recall_learn "pnpm vitest run src/foo.test.ts" 0 0 1700000000
+_tern_recall_learn "pnpm install --frozen-lockfile" 0 0 1700000000
+_tern_recall_learn 'echo "hello | world" && ls -la /tmp' 0 0 1700000000
+_tern_recall_learn "docker compose -f docker/dev.yml up -d" 0 0 1700000000
+_tern_recall_learn 'ls -la $HOME/Library' 0 0 1700000000
+_tern_recall_learn "cat ./README.md" 0 0 1700000000
+_tern_recall_learn "agy --dangerously-skip-permissions" 0 0 1700000000
+_tern_recall_learn "agy --dangerously-skip-permissions" 0 0 1700000000
+_tern_recall_learn "agy --model claude-opus" 0 0 1700000000
+
+words=(git '')
+CURRENT=2
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$learn_tmp/learned/git" "$REPLY"
+check "learn: top git subcommands ranked" "status commit push" "${(j: :)_tern_recall_tok[@]}"
+
+words=(git push '')
+CURRENT=3
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$learn_tmp/learned/git" "$REPLY"
+check "learn: failure penalised below success" "origin --force-with-lease" "${(j: :)_tern_recall_tok[@]}"
+
+[[ -e $learn_tmp/learned/sudo ]]; check "learn: wrapper sudo is not a program" 1 $?
+[[ -e $learn_tmp/learned/cat ]]; check "learn: skips paths (cat ./README.md)" 1 $?
+[[ -e $learn_tmp/learned/echo ]]; check "learn: skips quoted data (echo)" 1 $?
+
+words=(ls '')
+CURRENT=2
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$learn_tmp/learned/ls" "$REPLY"
+check "learn: splits pipeline and skips expansion" "-la" "${(j: :)_tern_recall_tok[@]}"
+
+words=(docker compose '')
+CURRENT=3
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$learn_tmp/learned/docker" "$REPLY"
+check "learn: context ignores flag data" "-f up" "${(j: :)_tern_recall_tok[@]}"
+
+words=(agy '')
+CURRENT=2
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$learn_tmp/learned/agy" "$REPLY"
+check "learn: keeps long flags, skips flag value, ranks by use" "--dangerously-skip-permissions --model" "${(j: :)_tern_recall_tok[@]}"
+
+# 8. preexec + precmd lifecycle: preexec counts use, precmd adds failure mark without double-counting uses.
+_tern_recall_learn "curl --fail --silent" 0 0 $now_ts
+_tern_recall_learn "curl --fail --silent" 22 1 $now_ts
+words=(curl '')
+CURRENT=2
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$learn_tmp/learned/curl" "$REPLY" $now_ts
+check "hooks: preexec + failing precmd keeps uses=1" "--fail -- 用了 1 次 · 今天" "${_tern_recall_say[1]}"
+local curl_line
+IFS= read -r curl_line < "$learn_tmp/learned/curl"
+check "hooks: failing precmd records fails=1 and epoch" $'--fail\t1\t1\t'"${now_ts}"$'\t0.4000\t' "$curl_line"
+
+# 9. History import: parses zsh extended timestamps, skips continuations and meta bytes.
+hist_tmp=$(mktemp -d)
+trap 'rm -rf $tmp $learn_tmp $hist_tmp' EXIT
+TERN_RECALL_DIR=$hist_tmp
+cat > "$hist_tmp/zsh_history" <<EOF
+: $(( now_ts - 100 )):0;rg --hidden --files
+: $(( now_ts - 50 )):0;rg --hidden
+rg --smart-case
+: $(( now_ts - 10 )):0;rg --broken \\
+EOF
+_tern_recall_import_history "$hist_tmp/zsh_history" $now_ts
+words=(rg '')
+CURRENT=2
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$hist_tmp/learned/rg" "$REPLY" $now_ts
+check "history: imports and ranks recent higher than undated" "--hidden --files --smart-case" "${(j: :)_tern_recall_tok[@]}"
+check "history: writes history-imported marker" "3 commands" "$(<$hist_tmp/history-imported)"
+
+# 10. `recall' CLI inspector works in any terminal.
+check "recall cli: lists program summary" $'rg\t--hidden  --files  --smart-case' "$(recall --list)"
+check "recall cli: inspects single program" $'rg --hidden\t用了 2 次 · 今天' "${"$(recall rg)"%%$'\n'*}"
+
+# 11. Concurrent panes learning the same program keep every update via flock.
+(
+	for (( i = 1; i <= 10; i++ )); do
+		_tern_recall_learn "cargo --release" 0 0 $now_ts
+	done
+) &
+pid1=$!
+(
+	for (( i = 1; i <= 10; i++ )); do
+		_tern_recall_learn "cargo --release" 0 0 $now_ts
+	done
+) &
+pid2=$!
+wait $pid1 $pid2
+words=(cargo '')
+CURRENT=2
+_tern_recall_program
+_tern_recall_context
+_tern_recall_rows "$hist_tmp/learned/cargo" "$REPLY" $now_ts
+check "flock: concurrent writers preserve all 20 uses" "--release -- 用了 20 次 · 今天" "${_tern_recall_say[1]}"
+
+# 12. `.zshrc' installer: appends safely with backup, is idempotent, upgrades legacy block, and preserves symlinks.
+rc_tmp=$(mktemp -d)
+trap 'rm -rf $tmp $learn_tmp $hist_tmp $rc_tmp' EXIT
+TERN_RECALL_DIR="$rc_tmp/data"
+print -r -- "export FOO=bar" > "$rc_tmp/real_zshrc"
+chmod 600 "$rc_tmp/real_zshrc"
+ln -s "$rc_tmp/real_zshrc" "$rc_tmp/.zshrc"
+
+check "install: appends to symlinked zshrc" "installed" "$(_tern_recall_install_zshrc "$rc_tmp/.zshrc" "$here/tern-recall.zsh")"
+[[ -L $rc_tmp/.zshrc ]]; check "install: preserves symlink" 0 $?
+[[ -f $rc_tmp/real_zshrc.bak ]]; check "install: writes backup .zshrc.bak" 0 $?
+check "install: idempotent on second run" "already-installed" "$(_tern_recall_install_zshrc "$rc_tmp/.zshrc" "$here/tern-recall.zsh")"
+
+# Cross-plugin idempotency: if another plugin copy (e.g. Tern vs standalone shell plugin)
+# is already valid in `.zshrc', the second plugin does not rewrite it (byte-for-byte identical),
+# in both directions.
+cp "$here/tern-recall.zsh" "$rc_tmp/other-plugin-copy.zsh"
+before_zshrc=$(<"$rc_tmp/.zshrc")
+check "install: cross-plugin idempotent (Tern -> standalone)" "already-installed" "$(_tern_recall_install_zshrc "$rc_tmp/.zshrc" "$rc_tmp/other-plugin-copy.zsh")"
+check "install: cross-plugin leaves .zshrc byte-for-byte unchanged" "$before_zshrc" "$(<"$rc_tmp/.zshrc")"
+
+print -r -- "export FOO=bar" > "$rc_tmp/reverse_zshrc"
+check "install: standalone installs first" "installed" "$(_tern_recall_install_zshrc "$rc_tmp/reverse_zshrc" "$rc_tmp/other-plugin-copy.zsh")"
+before_rev=$(<"$rc_tmp/reverse_zshrc")
+check "install: cross-plugin idempotent (standalone -> Tern)" "already-installed" "$(_tern_recall_install_zshrc "$rc_tmp/reverse_zshrc" "$here/tern-recall.zsh")"
+check "install: reverse cross-plugin leaves .zshrc byte-for-byte unchanged" "$before_rev" "$(<"$rc_tmp/reverse_zshrc")"
+# Legacy `$TERN_RECALL_DIR' block is upgraded in place while preserving surrounding lines and file permissions (0600).
+cat > "$rc_tmp/legacy_zshrc" <<'EOF'
+export BEFORE=1
+# >>> Tern command-recall >>>
+[ -n "$TERN_RECALL_DIR" ] && [ -r "$TERN_RECALL_DIR/tern-recall.zsh" ] && . "$TERN_RECALL_DIR/tern-recall.zsh"
+# <<< Tern command-recall <<<
+export AFTER=1
+EOF
+chmod 600 "$rc_tmp/legacy_zshrc"
+check "install: upgrades legacy block" "upgraded" "$(_tern_recall_install_zshrc "$rc_tmp/legacy_zshrc" "$here/tern-recall.zsh")"
+[[ "$(<$rc_tmp/legacy_zshrc)" == *"export BEFORE=1"* && "$(<$rc_tmp/legacy_zshrc)" == *"export AFTER=1"* && "$(<$rc_tmp/legacy_zshrc)" != *'$TERN_RECALL_DIR/tern-recall.zsh'* ]]
+check "install: legacy upgrade keeps surrounding content" 0 $?
+check "install: legacy upgrade preserves 0600 mode" "600" "$(stat -f '%Lp' "$rc_tmp/legacy_zshrc")"
+# 13. Standard Zsh plugin manager entrypoint (`tern-command-recall.plugin.zsh').
+source "${here:h}/tern-command-recall.plugin.zsh"
+check "plugin.zsh: entrypoint loads cleanly" 0 $?
+
+# 14. `scripts/install.sh' parses cleanly and installs into an isolated ZDOTDIR.
+/bin/zsh -n "${here:h}/scripts/install.sh"
+check "install.sh: syntax check (zsh -n)" 0 $?
+ZDOTDIR="$rc_tmp/zdot" TERN_RECALL_DIR="$rc_tmp/zdot-data" HISTFILE="$rc_tmp/nohist" /bin/zsh "${here:h}/scripts/install.sh" >/dev/null
+check "install.sh: executes cleanly" 0 $?
+[[ -f "$rc_tmp/zdot/.zshrc" ]]; check "install.sh: writes ZDOTDIR/.zshrc" 0 $?
 
 print -r -- ""
 if ((fails == 0)); then
