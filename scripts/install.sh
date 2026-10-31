@@ -128,13 +128,37 @@ _sync_tern_plugin() {
     return 0
   fi
 
+  # `tern plugin install` copies the whole directory, so a development checkout would
+  # also drop its build output (dist/), scratch files and gitignored junk into the
+  # plugins dir. When the tree holds anything beyond what git tracks, install only the
+  # tracked files. `status --ignored` reports untracked (`??`) and ignored (`!!`) both,
+  # which `ls-files --ignored` alone would miss.
+  local -a junk
+  junk=( ${(f)"$(git -C "$src" status --porcelain --ignored --untracked-files=all 2>/dev/null | grep -E '^\s*(\?\?|!!) ')"} )
+  local stage=''
+  if (( ${#junk[@]} )) && command -v rsync >/dev/null 2>&1; then
+    stage=$(mktemp -d)/$id
+    if ! mkdir -p "$stage" ||
+       ! rsync -a --files-from=<(git -C "$src" ls-files) "$src/" "$stage/" 2>/dev/null; then
+      print -ru2 -- "! 没能只打包 git 跟踪的文件，改为整个目录安装（可能带上 dist/）"
+      rm -rf "${stage:h}" 2>/dev/null
+      stage=''
+    else
+      src="$stage"
+    fi
+  fi
+
+  local install_out
   if install_out=$(tern plugin install "$src" --force 2>&1); then
     print -r -- "✓ Tern 插件已更新：$pdir/$id"
   else
     print -ru2 -- "✗ Tern 插件更新失败（shell 插件不受影响）：${install_out:-未知错误}"
-    print -ru2 -- "  手动重试：tern plugin install \"$src\" --force"
+    print -ru2 -- "  手动重试：tern plugin install \"$1\" --force"
+    [[ -n $stage ]] && rm -rf "${stage:h}"
     return 1
   fi
+  [[ -n $stage ]] && rm -rf "${stage:h}"
+  return 0
 }
 
 # Running from a local checkout means "install/update from what you are editing".

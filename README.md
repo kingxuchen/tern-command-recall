@@ -117,6 +117,7 @@ score = sqrt(n) × 1/(1 + days/14) × (1 − 0.6 × f/n)
 - **Tern**：自动接入 Tern 原生 GUI Tab 弹窗，并对后续补全组中的同名项去重。
 - **Ghostty / iTerm2 / Alacritty / Kitty / WezTerm / tmux**：在非 Tern 终端下自动启用 Zsh `menuselect` 方向键高亮菜单与 `── 常用参数 ──` 分组头。
 - **tty7 / Otty**：在其中敲的每条命令都会实时计入共享记忆库；若将终端的 Tab 补全交给 Shell（如在 tty7 设置中关闭内置 `Tab completion`），Tab 同样直接展示 `常用参数`。
+- **多少条就渲染多少条**：候选超过 zsh 的 `LISTMAX`（默认 100）且列表比窗口高时，zsh 第一下什么都不画，只问 `zsh: do you wish to see all N possibilities (M lines)?`，得再按一次键；插件在非 Tern 弹窗的终端里把 `LISTMAX` 抬到 `100000`，第一下 Tab 就把全部候选渲染出来（不用翻页，也不用先答一句）。想改回 zsh 的问法：在 `~/.zshrc` 的 Command Recall 块**之后** `export LISTMAX=100`。
 ## 隐私与清理
 
 全部在本机：`~/.local/share/command-recall/`，不发任何网络请求。清空记忆：

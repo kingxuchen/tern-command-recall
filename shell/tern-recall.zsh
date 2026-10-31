@@ -701,6 +701,18 @@ if [[ ${TERN_COMPLETE-} != 1 ]]; then
     zstyle ':completion:*:descriptions' format '%F{8}── %d ──%f'
   zstyle -s ':completion:*' menu _tern_recall_style ||
     zstyle ':completion:*' menu select
+  # Past LISTMAX (100 by default) zsh draws nothing on the first Tab and only asks
+  # `do you wish to see all N possibilities (M lines)?' — one wasted keypress, and this
+  # plugin's own group only makes long lists longer. LISTMAX is "how many matches to list
+  # without asking first", so raising it above any real list makes one Tab render every
+  # match. Measured with 141 matches in a 24-line window: 0 asks (it only stays quiet
+  # while the listing fits the screen), -1 happens not to ask although zshparam documents
+  # a negative value as "the list will be shown if it spans at most as many lines as given
+  # by the absolute value", i.e. -1 should ask — that docs/code gap is why this raises the
+  # number instead. zsh pre-sets LISTMAX to 100, so "is it set" proves nothing: only a
+  # value the user moved off that default counts as theirs. `list-prompt' stays untouched —
+  # any value there, the empty string included, switches zsh back to its paging list.
+  [[ ${LISTMAX} == 100 ]] && LISTMAX=100000
   unset _tern_recall_style
 fi
 if [[ -o interactive && ! -e "$TERN_RECALL_DIR/history-imported" ]]; then

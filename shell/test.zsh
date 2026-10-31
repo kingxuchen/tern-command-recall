@@ -45,6 +45,30 @@ check() {
 # visual bell, a screen flash on every Tab that lists.
 check "bell: listbeep off after source" 0 $([[ -o listbeep ]] && print 1 || print 0)
 
+# 0b. Past LISTMAX (100 by default) zsh draws nothing on the first Tab and only asks
+# `do you wish to see all N possibilities?' — one wasted keypress per long list, and this
+# plugin's own group only makes lists longer. Outside Tern's popup the plugin raises
+# LISTMAX so a single Tab renders every match however many there are — a big positive
+# number, because `-1' renders everything on zsh 5.9 yet zshparam documents a negative
+# value as line-based, and the two can't both be trusted. A LISTMAX the user moved off
+# the default is left alone, and `list-prompt' is never touched: any value there, the
+# empty string included, puts zsh back into its paging list instead of rendering.
+cat > "$tmp/listprobe.zsh" <<'PROBE'
+eval "${PRELUDE:-zmodload zsh/zutil}"
+source "$1"
+print -r -- "LISTMAX=${LISTMAX-unset} list-prompt=$(zstyle -s ':completion:*' list-prompt V && print -r -- "[$V]" || print -r -- unset)"
+PROBE
+list_probe() {  # $1: zsh to run before sourcing; $2: TERN_COMPLETE value
+	env -u TERN_COMPLETE ${2:+TERN_COMPLETE=$2} PRELUDE="${1:-zmodload zsh/zutil}" \
+		TERN_RECALL_DIR="$tmp/styledir" HISTFILE=/nonexistent \
+		/bin/zsh -f "$tmp/listprobe.zsh" "$here/tern-recall.zsh"
+}
+check "list: one Tab renders every match" "LISTMAX=100000 list-prompt=unset" "$(list_probe)"
+check "list: a LISTMAX the user moved off the default survives" "LISTMAX=200 list-prompt=unset" \
+	"$(list_probe 'zmodload zsh/zutil; export LISTMAX=200')"
+check "list: Tern's popup leaves zsh's listing alone" "LISTMAX=100 list-prompt=unset" \
+	"$(list_probe 'zmodload zsh/zutil' 1)"
+
 # 1. The program is the first word that is neither a wrapper nor VAR=value.
 words=(git push '')
 CURRENT=3
@@ -358,14 +382,18 @@ check "install: legacy upgrade preserves 0600 mode" "600" "$(stat -f '%Lp' "$rc_
 source "${here:h}/tern-command-recall.plugin.zsh"
 check "plugin.zsh: entrypoint loads cleanly" 0 $?
 
-# A fake `tern' on PATH records the calls the installer makes instead of touching the
-# plugin directory of this machine.
+# A fake `tern' on PATH records the calls the installer makes, and snapshots the tree
+# it was handed, instead of touching the plugin directory of this machine.
 stub=$(mktemp -d)
 mkdir -p "$stub/bin" "$stub/plugins"
 cat > "$stub/bin/tern" <<STUB
 #!/bin/sh
 printf '%s\n' "\$*" >> "$stub/calls"
 if [ "\$1" = plugin ] && [ "\$2" = dir ]; then printf '%s\n' "$stub/plugins"; fi
+if [ "\$1" = plugin ] && [ "\$2" = install ]; then
+	printf '%s\n' "\$3" > "$stub/src"
+	(cd "\$3" && find . -type f | sed 's|^\./||' | sort) > "$stub/tree"
+fi
 exit 0
 STUB
 chmod +x "$stub/bin/tern"
@@ -378,8 +406,10 @@ ZDOTDIR="$rc_tmp/zdot" TERN_RECALL_DIR="$rc_tmp/zdot-data" HISTFILE="$rc_tmp/noh
   PATH="$stub/bin:$PATH" /bin/zsh "${here:h}/scripts/install.sh" >/dev/null
 check "install.sh: executes cleanly" 0 $?
 [[ -f "$rc_tmp/zdot/.zshrc" ]]; check "install.sh: writes ZDOTDIR/.zshrc" 0 $?
-grep -q "plugin install ${here:h} --force" "$stub/calls"
-check "install.sh: installs the same tree as the Tern package" 0 $?
+grep -qx shell/tern-recall.zsh "$stub/tree" && grep -qx plugin.toml "$stub/tree"
+check "install.sh: Tern package carries the plugin files" 0 $?
+grep -q '^dist/' "$stub/tree"
+check "install.sh: build output stays out of the Tern package" 1 $?
 
 # 15. Re-running `scripts/install.sh' is the update, and a local edit inside the
 # clone never blocks it again: an edit already equal to the newest upstream commit is
@@ -452,6 +482,20 @@ check "update: duplicated hand edit creates no stash" 0 \
   "$(git -C "$up/plugin" stash list | wc -l | tr -d '[:space:]')"
 [[ -z $(git -C "$up/plugin" status --porcelain) ]]
 check "update: tree clean afterwards" 0 $?
+
+# Stray build output (untracked or ignored) must not ride into the plugins dir: what
+# gets installed is the tree git tracks.
+mkdir -p "$up/plugin/dist"
+print -r -- 'junk' > "$up/plugin/dist/command-recall-v0.0.1.zip"
+out=$(run_installer); st=$?
+check "package: run with stray build output succeeds" 0 $st
+[[ $(<"$stub/src") != "$up/plugin" ]]
+check "package: installs from a staged tree, not the working directory" 0 $?
+grep -q '^dist/' "$stub/tree"
+check "package: stray build output is left out of the stage" 1 $?
+grep -qx shell/tern-recall.zsh "$stub/tree" && grep -qx plugin.toml "$stub/tree"
+check "package: staged tree still holds the plugin files" 0 $?
+rm -rf "$up/plugin/dist"
 
 # A real local edit survives as a stash the user is told how to pop.
 print -r -- '# mine' >> "$up/plugin/shell/tern-recall.zsh"
