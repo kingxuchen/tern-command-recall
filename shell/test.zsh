@@ -358,12 +358,137 @@ check "install: legacy upgrade preserves 0600 mode" "600" "$(stat -f '%Lp' "$rc_
 source "${here:h}/tern-command-recall.plugin.zsh"
 check "plugin.zsh: entrypoint loads cleanly" 0 $?
 
-# 14. `scripts/install.sh' parses cleanly and installs into an isolated ZDOTDIR.
+# A fake `tern' on PATH records the calls the installer makes instead of touching the
+# plugin directory of this machine.
+stub=$(mktemp -d)
+mkdir -p "$stub/bin" "$stub/plugins"
+cat > "$stub/bin/tern" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >> "$stub/calls"
+if [ "\$1" = plugin ] && [ "\$2" = dir ]; then printf '%s\n' "$stub/plugins"; fi
+exit 0
+STUB
+chmod +x "$stub/bin/tern"
+
+# 14. `scripts/install.sh' parses cleanly, installs into an isolated ZDOTDIR and
+# refreshes the Tern package from the same tree it just installed.
 /bin/zsh -n "${here:h}/scripts/install.sh"
 check "install.sh: syntax check (zsh -n)" 0 $?
-ZDOTDIR="$rc_tmp/zdot" TERN_RECALL_DIR="$rc_tmp/zdot-data" HISTFILE="$rc_tmp/nohist" /bin/zsh "${here:h}/scripts/install.sh" >/dev/null
+ZDOTDIR="$rc_tmp/zdot" TERN_RECALL_DIR="$rc_tmp/zdot-data" HISTFILE="$rc_tmp/nohist" \
+  PATH="$stub/bin:$PATH" /bin/zsh "${here:h}/scripts/install.sh" >/dev/null
 check "install.sh: executes cleanly" 0 $?
 [[ -f "$rc_tmp/zdot/.zshrc" ]]; check "install.sh: writes ZDOTDIR/.zshrc" 0 $?
+grep -q "plugin install ${here:h} --force" "$stub/calls"
+check "install.sh: installs the same tree as the Tern package" 0 $?
+
+# 15. Re-running `scripts/install.sh' is the update, and a local edit inside the
+# clone never blocks it again: an edit already equal to the newest upstream commit is
+# dropped, a real one is stashed for the user to pop, and a commit of your own stops
+# the update instead of being erased.
+up=$(mktemp -d)
+trap 'rm -rf $tmp $learn_tmp $hist_tmp $rc_tmp $stub $up' EXIT
+gcfg=(-c user.name=test -c user.email=test@example.com)
+mkdir -p "$up/origin/shell" "$up/origin/scripts" "$up/tool/scripts"
+cp "$here/tern-recall.zsh" "$up/origin/shell/"
+cp "${here:h}/plugin.toml" "$up/origin/"
+# Run the installer from a directory that is not a checkout, so the clone path runs.
+cp "${here:h}/scripts/install.sh" "$up/tool/scripts/install.sh"
+git init --quiet "$up/origin"
+git -C "$up/origin" "${gcfg[@]}" add -A
+git -C "$up/origin" "${gcfg[@]}" commit -qm v1
+origin_head() { git -C "$up/origin" rev-parse HEAD; }
+plugin_head() { git -C "$up/plugin" rev-parse HEAD; }
+run_installer() {
+	: > "$stub/calls"
+	COMMAND_RECALL_REPO="file://$up/origin" COMMAND_RECALL_INSTALL_DIR="$up/plugin" \
+		TERN_RECALL_DIR="$up/data" ZDOTDIR="$up/zdot" HISTFILE="$up/nohist" \
+		PATH="$stub/bin:$PATH" /bin/zsh "$up/tool/scripts/install.sh" 2>&1
+}
+
+out=$(run_installer); st=$?
+check "update: first run installs a clone" 0 $st
+check "update: first run clones the newest commit" "$(origin_head)" "$(plugin_head)"
+grep -q "plugin install $up/plugin --force" "$stub/calls"
+check "update: first run installs the Tern package from the clone" 0 $?
+# `git stash' needs an identity; do not depend on the machine running the suite.
+git -C "$up/plugin" config user.name test
+git -C "$up/plugin" config user.email test@example.com
+
+out=$(run_installer); st=$?
+check "update: clean tree exits clean" 0 $st
+[[ $out == *已经是最新* ]]
+check "update: says it is already newest" 0 $?
+grep -q "plugin install $up/plugin --force" "$stub/calls"
+check "update: newest code still refreshes the Tern package" 0 $?
+
+# 仓库连不上了（离线 / 地址改了）：不更新，但磁盘上这一份照样把两个面装好。
+git -C "$up/plugin" remote set-url origin "$up/gone"
+out=$(run_installer); st=$?
+check "update: unreachable repo reports failure" 1 $st
+[[ $out == *拉取最新代码失败* && $out == *先用着当前版本* ]]
+check "update: says it keeps running the current version" 0 $?
+grep -q "plugin install $up/plugin --force" "$stub/calls"
+check "update: still installs the on-disk copy without network" 0 $?
+git -C "$up/plugin" remote set-url origin "file://$up/origin"
+
+# Upstream usually ships more than the file you were editing — v2 touches two.
+print -r -- '# v2' >> "$up/origin/shell/tern-recall.zsh"
+print -r -- '# v2' >> "$up/origin/plugin.toml"
+git -C "$up/origin" "${gcfg[@]}" commit -qam v2
+out=$(run_installer); st=$?
+check "update: fast-forwards a newer upstream" 0 $st
+check "update: clone moved to v2" "$(origin_head)" "$(plugin_head)"
+
+# The reported incident: the clone was rewound and the same fix typed in by hand.
+# The newest code must win, no stash must pile up, and nothing may look dirty.
+git -C "$up/plugin" reset -q --hard HEAD~1
+print -r -- '# v2' >> "$up/plugin/shell/tern-recall.zsh"
+out=$(run_installer); st=$?
+check "update: hand edit equal to upstream does not block" 0 $st
+check "update: hand edit equal to upstream lands on newest" "$(origin_head)" "$(plugin_head)"
+[[ $out == *和上游最新版本一样* ]]
+check "update: drops the duplicated hand edit by path, not by whole tree" 0 $?
+check "update: duplicated hand edit creates no stash" 0 \
+  "$(git -C "$up/plugin" stash list | wc -l | tr -d '[:space:]')"
+[[ -z $(git -C "$up/plugin" status --porcelain) ]]
+check "update: tree clean afterwards" 0 $?
+
+# A real local edit survives as a stash the user is told how to pop.
+print -r -- '# mine' >> "$up/plugin/shell/tern-recall.zsh"
+print -r -- '# v3' >> "$up/origin/shell/tern-recall.zsh"
+git -C "$up/origin" "${gcfg[@]}" commit -qam v3
+out=$(run_installer); st=$?
+check "update: real local edit does not block" 0 $st
+check "update: real local edit still moves to newest" "$(origin_head)" "$(plugin_head)"
+check "update: real local edit is kept as one stash" 1 \
+  "$(git -C "$up/plugin" stash list | wc -l | tr -d '[:space:]')"
+git -C "$up/plugin" stash show -p 'stash@{0}' | grep -q '# mine'
+check "update: stash holds the local edit" 0 $?
+[[ $out == *'stash pop'* ]]
+check "update: prints how to get the local edit back" 0 $?
+
+# A linked plugin is a developer's own checkout: never overwrite it.
+print -r -- "$up/plugin" > "$stub/plugins/command-recall.path"
+out=$(run_installer); st=$?
+[[ $out == *不覆盖* ]]
+check "update: linked plugin is left alone" 0 $?
+check "update: linked run still succeeds" 0 $st
+[[ $(grep -c 'plugin install' "$stub/calls") == 0 ]]
+check "update: linked plugin installs nothing" 0 $?
+rm -f "$stub/plugins/command-recall.path"
+
+# Commits made in the clone are nobody's to erase: stop, say so, change nothing.
+print -r -- '# local work' >> "$up/plugin/shell/tern-recall.zsh"
+git -C "$up/plugin" "${gcfg[@]}" commit -qam 'local work'
+local_head=$(plugin_head)
+print -r -- '# v4' >> "$up/origin/shell/tern-recall.zsh"
+git -C "$up/origin" "${gcfg[@]}" commit -qam v4
+out=$(run_installer); st=$?
+check "update: refuses to drop your own commit" 1 $st
+[[ $(plugin_head) == $local_head && -z $(git -C "$up/plugin" status --porcelain) ]]
+check "update: own commit left untouched" 0 $?
+[[ $out == *不在一条线上* ]]
+check "update: says why it stopped" 0 $?
 
 print -r -- ""
 if ((fails == 0)); then

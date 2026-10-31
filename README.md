@@ -71,6 +71,22 @@ plug "kingxuchen/tern-command-recall"
 - 首次打开 Tern 窗口时（若尚未生成 `~/.local/share/command-recall/zshrc-configured` 标记），会自动备份 `~/.zshrc.bak` 并把通用加载行写入 `~/.zshrc`（若你日后手动从 `~/.zshrc` 删除该块以停用，由于标记已存在，不会再次强行写回）。
 - 你也可以随时在命令面板（⇧⌘P）运行 `Command Recall: 写入 ~/.zshrc（全终端生效）`。
 
+### 更新：重跑一遍安装命令
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kingxuchen/tern-command-recall/main/scripts/install.sh | zsh
+```
+
+同一条命令就是更新，一次把两处都对齐到最新代码：`~/.local/share/command-recall/plugin`（shell 插件的 git clone）和 `~/Library/Application Support/Tern/plugins/command-recall`（Tern 插件包）。本机没装 Tern 就只更新 shell 侧。
+
+在 clone 里手改过代码也不会再卡住更新：
+
+- 手改的内容和上游最新版本一样 → 直接用最新代码，不重复留一份；
+- 是自己的真改动 → 先存进 `git stash` 再更新，脚本会打印取回命令 `git stash pop`；
+- clone 里有自己的提交 → 自动更新会丢掉东西，所以停下不动，并提示怎么 rebase。
+
+在本地仓库里开发时 `zsh scripts/install.sh` 表示「用当前这份代码安装」：只刷新 shell 加载块和 Tern 插件包，不动上游。用 `tern plugin link` 把插件指向开发目录的话，更新会跳过覆盖，改完代码 `tern plugin reload command-recall` 即可。
+
 ### 终端内检索与查看（`recall`）
 
 ```zsh
@@ -112,7 +128,7 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/command-recall"
 ## 开发与测试
 
 ```sh
-zsh -f shell/test.zsh         # 58 项断言（学习引擎、失败惩罚、历史导入、并发文件锁、.zshrc 安全安装与升级、去重、recall 命令）
+zsh -f shell/test.zsh         # 全绿即通过（学习引擎、失败惩罚、历史导入、并发文件锁、.zshrc 安全安装与升级、去重、recall 命令、安装与更新两条链路）
 ```
 
 ## 文件
@@ -121,7 +137,7 @@ zsh -f shell/test.zsh         # 58 项断言（学习引擎、失败惩罚、历
 |---|---|
 | `tern-command-recall.plugin.zsh` | 标准 Zsh 插件管理器入口（Zinit / Antidote / Oh-My-Zsh / Zap） |
 | `shell/tern-recall.zsh` | 核心实现：纯 Zsh 在线学习（`preexec`/`precmd`）、历史导入、Tab 补全器、`recall` 命令、`--install` |
-| `scripts/install.sh` | 面向 Ghostty / Otty / tty7 等所有终端的一键安装脚本 |
+| `scripts/install.sh` | 一键安装 / 更新脚本：对齐 shell 插件的 clone 与 Tern 插件包，重跑即更新 |
 | `shell/test.zsh` | 自动化回归测试套件 |
 | `plugin.toml` | Tern 插件清单（可选，仅挂载 `window.luau`） |
 | `window.luau` | Tern 窗口扩展：首次启动自动配置 `~/.zshrc`、查看已学命令选择器 |
