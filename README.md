@@ -96,6 +96,9 @@ plug "kingxuchen/tern-command-recall"
 if [ -z "${TERN_COMPLETE-}" ] && [ -r "$HOME/.fzf-tab/fzf-tab.plugin.zsh" ]; then
   . "$HOME/.fzf-tab/fzf-tab.plugin.zsh"
   zstyle ':fzf-tab:*' fzf-flags --border=rounded --info=inline-right
+  # --height = 候选数 + fzf-pad。默认 pad=2 只够查询行+分隔线；圆角边框还要
+  # 上下各一行，不补上 3 个候选就只能露出 1 行。
+  zstyle ':fzf-tab:*' fzf-pad 4
   # 有分组标题时 fzf-tab 默认给每条候选加 `·` 当分组标记，去掉免得像是命令的一部分
   zstyle ':fzf-tab:*' prefix ''
 fi
