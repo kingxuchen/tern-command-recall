@@ -106,6 +106,62 @@ tern.command({
 	end,
 })
 
+local function forgetToken(prog, token)
+	tern.process.run(
+		{ "/bin/zsh", SHELL_FILE, "--forget", prog, token },
+		{ timeout_ms = 5000 },
+		function(res, cx)
+			if not cx then
+				return
+			end
+			local out = (res and res.stdout or "")
+			if string.match(out, "^forgot") then
+				cx:toast("info", "已忘记 " .. token, prog)
+			else
+				cx:toast("error", "没删掉", "这条已经删过了，或者程序名不合法")
+			end
+		end
+	)
+end
+
+-- Tern's own Tab popup keeps the highlighted row to itself (the completion
+-- protocol only returns the accepted word), so forgetting goes through the
+-- palette picker instead of a key inside the popup.
+tern.command({
+	id = "forget",
+	title = "Command Recall: 忘记某条",
+	icon = "sparkle",
+	group = "Command Recall",
+	run = function(cx)
+		local items = programs()
+		if #items == 0 then
+			cx:toast("info", "还没有学到命令", "在终端里敲几条命令，再按 Tab 看看")
+			return
+		end
+		cx:pick({ items = items, placeholder = "选一个命令" }):next(function(chosen)
+			if not chosen then
+				return
+			end
+			local picks = {}
+			for _, row in readRows(chosen.label, PICK_ROWS) do
+				table.insert(picks, { label = row.line })
+			end
+			if #picks == 0 then
+				return
+			end
+			cx:pick({ items = picks, placeholder = "选一条忘记；同名的词在这个命令里一起删" }):next(function(pick)
+				if not pick then
+					return
+				end
+				local token = string.match(pick.label, "(%S+)$")
+				if token then
+					forgetToken(chosen.label, token)
+				end
+			end)
+		end)
+	end,
+})
+
 local function installZshrc(notifyAlways)
 	tern.process.run({ "/bin/zsh", SHELL_FILE, "--install" }, { timeout_ms = 5000 }, function(res, cx)
 		if not cx then

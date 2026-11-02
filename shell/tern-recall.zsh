@@ -1,3 +1,4 @@
+#!/bin/zsh
 # tern-recall — universal zsh argument learning & Tab completion.
 #
 # Works in every terminal (Ghostty, Tern, tty7, Otty, iTerm2, Alacritty, Kitty,
@@ -42,10 +43,12 @@ _tern_recall_keywords=(
 _tern_recall_splits=("|" ";" $'\n' "&&" "||")
 
 # A program name the store may hold: a plain word, no path, no traversal.
+# No `##' repetition here on purpose: the rule must hold even where
+# EXTENDED_GLOB is off, so "anything outside the allowed set" is the test.
 _tern_recall_is_name() {
   local p=$1
   (( ${#p} >= 1 && ${#p} <= 40 )) || return 1
-  [[ $p != *..* && $p == [[:alnum:]._+-]## ]]
+  [[ $p != *..* && $p != *[^[:alnum:]._+-]* ]]
 }
 
 # Options and subcommands yes; paths, globs, expansions, quotes and data no.
@@ -53,7 +56,7 @@ _tern_recall_interesting() {
   local tok=$1
   (( ${#tok} >= 1 && ${#tok} <= 64 )) || return 1
   [[ $tok != *[/%\*\$~\'\"\`\(\)\<\>\|\&\;\{\}\[\]!#=\ \\$'\t'$'\n']* ]] || return 1
-  [[ $tok == -* || $tok == [[:alnum:]+_,.:@-]## ]]
+  [[ $tok == -* || $tok != *[^[:alnum:]+_,.:@-]* ]]
 }
 
 # Ranking: sqrt-damped frequency over a 14-day recency half-life, times a
@@ -338,6 +341,12 @@ _tern_recall_precmd() {
   if [[ -n $line ]] && (( ret != 0 )); then
     _tern_recall_learn "$line" $ret 1
   fi
+  # A deletion made in an fzf panel waits here for the next prompt.
+  if _tern_recall_take_notice; then
+    builtin print -r -- "$REPLY"
+  fi
+  unset TERN_RECALL_FZF_PROG
+  return 0
 }
 
 # The program being run, in REPLY, with its word index in $_tern_recall_at.
@@ -392,6 +401,163 @@ _tern_recall_rows() {
   (( ${#_tern_recall_tok[@]} ))
 }
 
+# The word the cursor sits in, built from the two halves of the line, in REPLY.
+_tern_recall_word_at() {
+  local left=${1##*[[:space:]]}
+  local right=${2%%[[:space:]]*}
+  REPLY=$left$right
+  [[ -n $REPLY ]]
+}
+
+# The program of a plain command line, in REPLY, by the completion rule: the
+# first word that is neither a wrapper nor `VAR=value'.
+_tern_recall_line_program() {
+  local -a words
+  local -i CURRENT
+  words=( ${(z)1} )
+  CURRENT=$(( ${#words} + 1 ))
+  _tern_recall_program
+}
+
+# Forget one word of one program: every context goes, other words and other
+# programs stay. Same per-program lock and atomic replace as the learner, so a
+# pane that is learning at the same moment cannot resurrect the row. Fails when
+# the store holds no such word; an emptied store loses its file.
+_tern_recall_forget() {
+  emulate -L zsh
+  local prog=$1 tok=$2
+  _tern_recall_is_name "$prog" && _tern_recall_interesting "$tok" || return 1
+  local file="$TERN_RECALL_DIR/learned/$prog"
+  [[ -r $file ]] || return 1
+
+  local lockfile="${file}.lock" lockfd=''
+  [[ -e $lockfile ]] || : >> "$lockfile" 2>/dev/null
+  zsystem flock -t 2 -f lockfd "$lockfile" 2>/dev/null || return 1
+  local -i dropped=0
+  local -a keep
+  local line
+  {
+    while IFS= read -r line; do
+      [[ -n $line ]] || continue
+      if [[ $line == "$tok" || $line == "$tok"$'\t'* ]]; then
+        (( dropped++ ))
+        continue
+      fi
+      keep+=("$line")
+    done < "$file"
+    (( dropped )) || return 1
+    if (( ${#keep[@]} )); then
+      local tmpfile="${file}.tmp.$$"
+      builtin print -rl -- "${keep[@]}" >| "$tmpfile" 2>/dev/null &&
+        zf_mv -f "$tmpfile" "$file" 2>/dev/null || return 1
+    else
+      zf_rm -f "$file" 2>/dev/null
+    fi
+  } always {
+    [[ -n $lockfd ]] && zsystem flock -u $lockfd 2>/dev/null
+  }
+}
+
+# One short line about the last deletion, printed by whichever prompt draw comes
+# next — the panel that did the deleting is gone by then.
+_tern_recall_notice() {
+  builtin print -r -- "$1" >| "$TERN_RECALL_DIR/notice" 2>/dev/null
+}
+
+_tern_recall_take_notice() {
+  [[ -r "$TERN_RECALL_DIR/notice" ]] || return 1
+  REPLY=$(<"$TERN_RECALL_DIR/notice")
+  zf_rm -f "$TERN_RECALL_DIR/notice" 2>/dev/null
+  [[ -n $REPLY ]]
+}
+
+# `<program> --fzf-delete <selected text>`: what the fzf bind runs. It prints
+# `abort' only after a real deletion, so the panel closes for a forgotten word
+# and for nothing else.
+_tern_recall_fzf_delete() {
+  emulate -L zsh
+  local prog=$1 sel=${2-} word
+  # `recall' hands over the whole line; fzf-tab hands over one displayed row and
+  # may lead it with its group marker (`·'), which no token ever starts with.
+  word=${sel##*[[:space:]]}
+  word=${word##[^[:alnum:]_.,:@+-]}
+  # fzf-tab rows add a zero-width space to show they are ours (see the completer).
+  word=${word%$'\u200b'}
+  [[ -n $word ]] || return 1
+  _tern_recall_forget "$prog" "$word" || return 1
+  _tern_recall_notice "已忘记 $word · $prog"
+  builtin print -r -- abort
+}
+
+# The physical delete key inside an fzf panel. With an empty search box it forgets
+# the highlighted row; once a filter is typed it keeps deleting filter characters
+# (and falls back to fzf's own `backward-delete-char/eof' when there is nothing to
+# forget), so a typo can still be fixed and nothing is dropped by accident.
+_tern_recall_fzf_bspace() {
+  emulate -L zsh
+  # <program> <selected row> <query> [own]
+  local prog=$1 sel=${2-} query=${3-} own=${4-}
+  # A filter being typed: delete its characters, whatever row is highlighted.
+  if [[ -n $query ]]; then
+    builtin print -r -- 'backward-delete-char/eof'
+    return 0
+  fi
+  # Only a row this plugin produced may be forgotten; anything fzf-tab's own
+  # completers show (files, `git' subcommands) gets no action and no panel close.
+  [[ -n $own || $sel == *$'\u200b' ]] || return 0
+  if _tern_recall_fzf_delete "$prog" "$sel"; then
+    return 0
+  fi
+  builtin print -r -- 'backward-delete-char/eof'
+}
+
+# The fzf bindings fzf-tab reads before it starts fzf. Offered only while the
+# completer actually found learned words, so a File/`git' panel keeps fzf's own
+# keys. Delete alone: the physical delete key there edits the query. `{2}' is
+# the display text of the highlighted row (field 1 is empty and the metadata
+# follows NUL-separated, which no shell argument can carry).
+_tern_recall_fzf_binding() {
+  reply=()
+  if [[ -n ${TERN_RECALL_FZF_PROG-} ]]; then
+    # One binding only: fzf-tab hands this to fzf as one comma-joined `--bind'
+    # value, and a second entry there stops the first from taking effect. The
+    # script is executed directly (shebang) — a `zsh <script>' payload is
+    # silently ignored in that position.
+    reply=( "bspace:transform:${(q)_tern_recall_self} --fzf-bspace ${(q)TERN_RECALL_FZF_PROG} {2} {q}" )
+  else
+    # An empty answer is not neutral: fzf-tab appends it to its own `--bind'
+    # list, leaving a stray comma, and fzf then refuses to start — Tab looks
+    # dead in every completion. Keep the list non-empty with a key nobody uses.
+    reply=( 'f12:ignore' )
+  fi
+}
+
+# `Ctrl+X Ctrl+D' in ordinary editing: forget the word under the cursor when it
+# is one of the program's learned words, and say so. zsh's own completion menu
+# cannot host this — its `menuselect' keymap only runs its fixed set of builtin
+# functions, a plugin widget bound there is never called — so the chord works
+# with or without a menu on screen.
+_tern_recall_forget_key() {
+  local word='' prog=''
+  _tern_recall_word_at "$LBUFFER" "$RBUFFER" || { zle -M '光标下没有词'; return 0 }
+  word=$REPLY
+  _tern_recall_line_program "$LBUFFER$RBUFFER" || { zle -M "没有学到 $word"; return 0 }
+  prog=$REPLY
+  if _tern_recall_forget "$prog" "$word"; then
+    zle -M "已忘记 $word · $prog"
+  else
+    zle -M "没有学到 $word · $prog"
+  fi
+}
+
+# fzf has closed by now, so the panel cannot say what it dropped: a pending
+# notice is printed as one plain line above the redrawn prompt.
+_tern_recall_notice_redraw() {
+  _tern_recall_take_notice || return 0
+  builtin print -r -- "$REPLY"
+}
+
+
 # Drops duplicate words that the later completers also added to Tern's list
 # (`_tern_cmp_*' in tern-complete), keeping our `常用参数' entry first.
 _tern_recall_post() {
@@ -433,6 +599,9 @@ _tern_recall_post() {
 # The completer. Returns 1 even after adding matches, so the ordinary completers
 # still run underneath ours.
 _tern_recall() {
+  # Every Tab restates this: fzf-tab's Delete binding is offered only for the
+  # program whose words are in the list being shown.
+  unset TERN_RECALL_FZF_PROG
   (( CURRENT > 1 )) || return 1
 
   _tern_recall_at=0
@@ -442,14 +611,28 @@ _tern_recall() {
 
   _tern_recall_context
   _tern_recall_rows "$TERN_RECALL_DIR/learned/$prog" "$REPLY" || return 1
+  export TERN_RECALL_FZF_PROG=$prog
 
   (( ${+comppostfuncs} )) && comppostfuncs+=(_tern_recall_post)
 
   local heading='常用参数'
   if [[ ${TERN_COMPLETE-} != 1 ]]; then
-    heading='%F{6}── 常用参数 ──%f'
+    heading='── 常用参数 ──'
   fi
-  compadd -V tern-recall -X "$heading" -a _tern_recall_tok
+  # fzf-tab shows this row's text to the fzf bind, so a zero-width space marks a
+  # row as ours: Delete then knows the difference between our word and a `git'
+  # subcommand or a file name that happens to be spelled the same. Invisible,
+  # and only added when that picker is in play.
+  if [[ ${TERN_COMPLETE-} != 1 ]] && (( $+functions[fzf-tab-complete] )); then
+    local -a disp
+    local w
+    for w in "${_tern_recall_tok[@]}"; do
+      disp+=( "${w}"$'\u200b' )
+    done
+    compadd -V tern-recall -X "$heading" -d disp -a _tern_recall_tok
+  else
+    compadd -V tern-recall -X "$heading" -a _tern_recall_tok
+  fi
   return 1
 }
 
@@ -465,6 +648,15 @@ recall() {
   if [[ ${1-} == --install ]]; then
     _tern_recall_install_zshrc "${2-}" "${3-}"
     return $?
+  fi
+  if [[ ${1-} == forget ]]; then
+    local f_prog=${2-} f_tok=${3-}
+    if _tern_recall_forget "$f_prog" "$f_tok"; then
+      builtin print -r -- "已忘记 $f_tok · $f_prog"
+      return 0
+    fi
+    builtin print -ru2 -- "recall: $f_prog 里没有学到 $f_tok"
+    return 1
   fi
 
   if [[ -n ${1-} && ${1-} != --list ]]; then
@@ -509,11 +701,13 @@ recall() {
   done
 
   if [[ ${1-} != --list && -o interactive && -t 0 && -t 1 ]] && command -v fzf >/dev/null 2>&1; then
-    local chosen_prog chosen_line
+      local chosen_prog chosen_line
     chosen_prog=$(builtin print -rl -- "${summary[@]}" | fzf --delimiter=$'\t' --with-nth=1,2 --prompt="选一个命令 > ") || return 0
     chosen_prog=${chosen_prog%%$'\t'*}
     [[ -n $chosen_prog ]] || return 0
-    chosen_line=$(recall "$chosen_prog" | fzf --prompt="插入这条命令 > ") || return 0
+    chosen_line=$(recall "$chosen_prog" | fzf --prompt="插入这条命令 > " \
+      --bind "bspace:transform:${(q)_tern_recall_self} --fzf-bspace ${(q)chosen_prog} {} {q} 1" \
+      --bind "delete:transform:${(q)_tern_recall_self} --fzf-delete ${(q)chosen_prog} {}") || return 0
     [[ -n $chosen_line ]] && builtin print -z -- "$chosen_line"
     return 0
   fi
@@ -654,12 +848,31 @@ if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --install ]]; then
   [[ -e "$TERN_RECALL_DIR/history-imported" ]] || _tern_recall_import_history
   exit 0
 fi
+# Same entry the Tern window plugin calls through `tern.process.run'.
+if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --forget ]]; then
+  _tern_recall_forget "${2-}" "${3-}" || exit 1
+  builtin print -r -- "forgot ${2-} ${3-}"
+  exit 0
+fi
+# Same entry the fzf binds call: prints `abort' only on a real deletion.
+if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --fzf-delete ]]; then
+  _tern_recall_fzf_delete "${2-}" "${3-}" || exit 1
+  exit 0
+fi
+if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --fzf-bspace ]]; then
+  _tern_recall_fzf_bspace "${2-}" "${3-}" "${4-}" "${5-}"
+  exit 0
+fi
 
 # zsh rings its bell whenever it displays a completion list (LIST_BEEP); with a
 # visual bell the terminal renders that as a screen flash on the first Tab. This
 # plugin adds a group to every completion, so that bell fires constantly. Turn it
 # off: the list, the menu and the ranking are untouched, only the bell goes away.
 unsetopt listbeep
+# Closing the picker also ends with one zle beep (for a cancel as much as for a
+# forgotten word), and tty7 draws any bell as a screen flash. Silence the bell
+# itself; put `setopt beep' after the load block in ~/.zshrc to have it back.
+unsetopt beep
 
 # Register hooks once.
 typeset -ga preexec_functions precmd_functions
@@ -677,6 +890,20 @@ if [[ ${_tern_recall_completers[(Ie)_tern_recall]} -eq 0 ]]; then
   zstyle ':completion:*' completer _tern_recall $_tern_recall_completers
 fi
 
+# A forgotten word announced after an fzf panel closed: the redraw that follows
+# the panel is the first moment the shell can print on the line again.
+# Forget the word under the cursor on a chord, but only where the user has not
+# put something else on it.
+if [[ -o interactive ]] && (( ${+builtins[zle]} )); then
+  zle -N _tern_recall_forget_key
+  [[ $(bindkey '^X^D') == *undefined-key ]] && bindkey '^X^D' _tern_recall_forget_key
+  autoload -Uz add-zle-hook-widget 2>/dev/null &&
+    add-zle-hook-widget line-pre-redraw _tern_recall_notice_redraw 2>/dev/null
+fi
+# fzf-tab asks for these right before it starts fzf; `reply' stays empty unless
+# this completion found learned words, so other lists keep fzf's own keys.
+zstyle -e ':fzf-tab:*' fzf-bindings _tern_recall_fzf_binding
+
 # Default grouping and interactive menu styling for standard terminals (Ghostty,
 # iTerm2, Alacritty, tty7/Otty shell Tab) when not inside Tern's popup and when
 # the user has not set their own.
@@ -684,8 +911,10 @@ if [[ ${TERN_COMPLETE-} != 1 ]]; then
   typeset -g _tern_recall_style
   zstyle -s ':completion:*' group-name _tern_recall_style ||
     zstyle ':completion:*' group-name ''
+  # Plain text: a picker that draws the list itself (fzf-tab and friends) shows
+  # the header verbatim, so `%F{..}' escapes would print as is.
   zstyle -s ':completion:*:descriptions' format _tern_recall_style ||
-    zstyle ':completion:*:descriptions' format '%F{8}── %d ──%f'
+    zstyle ':completion:*:descriptions' format '── %d ──'
   zstyle -s ':completion:*' menu _tern_recall_style ||
     zstyle ':completion:*' menu select
   # Past LISTMAX (100 by default) zsh draws nothing on the first Tab and only asks

@@ -71,6 +71,38 @@ plug "kingxuchen/tern-command-recall"
 - 首次打开 Tern 窗口时（若尚未生成 `~/.local/share/command-recall/zshrc-configured` 标记），会自动备份 `~/.zshrc.bak` 并把通用加载行写入 `~/.zshrc`（若你日后手动从 `~/.zshrc` 删除该块以停用，由于标记已存在，不会再次强行写回）。
 - 你也可以随时在命令面板（⇧⌘P）运行 `Command Recall: 写入 ~/.zshrc（全终端生效）`。
 
+### 想保持 `~/.zshrc` 精简
+
+安装器只往 `~/.zshrc` 写一个带标记的块，块体就是一行 source。把这一行换成指向你自己的文件、其余加载都放进去，安装器照样认得、重跑更新也不会写回第二份：
+
+```zsh
+# ~/.zshrc 里只留这一行
+[ -r "$HOME/.config/zsh/command-recall.zsh" ] && . "$HOME/.config/zsh/command-recall.zsh"
+```
+
+```zsh
+# ~/.config/zsh/command-recall.zsh
+[ -r "$HOME/Library/Application Support/Tern/plugins/command-recall/shell/tern-recall.zsh" ] &&
+  . "$HOME/Library/Application Support/Tern/plugins/command-recall/shell/tern-recall.zsh"
+```
+
+判定规则：安装器只看标记块里那条引号路径**是否存在**，存在就认为已装好，不会重写；路径写错或文件被删才会重新写回标准块。
+
+### Tab 弹窗（fzf-tab）
+
+插件只负责“给什么候选”，弹窗由渲染方决定：Tern 里是它自己的 GUI 弹窗；其他终端想要带边框的弹窗面板，装上 `fzf` + `fzf-tab` 即可，「常用参数」会和文件名、`git` 子命令一起出现在弹出的面板里。注意 Tern 会把 `compadd` 换成自己的桥，所以加载 fzf-tab 时要跳过 Tern：
+
+```zsh
+if [ -z "${TERN_COMPLETE-}" ] && [ -r "$HOME/.fzf-tab/fzf-tab.plugin.zsh" ]; then
+  . "$HOME/.fzf-tab/fzf-tab.plugin.zsh"
+  zstyle ':fzf-tab:*' fzf-flags --border=rounded --info=inline-right
+  # 有分组标题时 fzf-tab 默认给每条候选加 `·` 当分组标记，去掉免得像是命令的一部分
+  zstyle ':fzf-tab:*' prefix ''
+fi
+```
+
+（`·` 的来源：只要存在 `zstyle ':completion:*:descriptions' format`——本插件会设——fzf-tab 就认为列表是分组的，于是给每条加前缀。`prefix ''` 只关掉这个符号，分组仍由标题行区分。）
+
 ### 更新：重跑一遍安装命令
 
 ```sh
@@ -92,9 +124,31 @@ curl -fsSL https://raw.githubusercontent.com/kingxuchen/tern-command-recall/main
 ```zsh
 recall            # 若装有 fzf 则弹出交互式选择器并直接填入命令行；否则列出所有已学程序
 recall git        # 查看 git 已学的高频参数（按频率与最近使用排序，不显示次数和日期）
+recall forget git --no-pager   # 忘掉 git 的 --no-pager（这个命令的所有上下文一起删）
 recall --list     # 纯文本列出所有已学程序及前 3 个常用参数
 recall --install  # 手动触发安全写入 ~/.zshrc
 ```
+
+### 忘记学到的东西
+
+删的是「这个程序里的这个词」：它的所有上下文一起走，别的词、别的程序、其余统计都不动。删完只是把这个词的计数清零，**没有拉黑**——你下次再用它，会被重新学到、重新开始计数。
+
+| 界面 | 怎么删 |
+|---|---|
+| fzf-tab 的 Tab 弹窗 | 选中那一条直接按 **Delete**（那颗键盘上 `+` 右边的键）：删掉、面板关闭，命令行上方出现 `已忘记 --no-pager · git` |
+| `recall` 的 fzf 选择器 | 同样：选中后按 **Delete**（也可以 fn+Delete） |
+| Tern | 命令面板（⇧⌘P）→「Command Recall: 忘记某条」→ 选命令 → 选词 |
+| 任意终端里正在编辑的那行 | 光标停在这个词上，按 **Ctrl+X Ctrl+D** |
+| 任意终端 | `recall forget <程序> <词>` |
+
+几点要先说清：
+
+- 面板里的 **Delete 只对「常用参数」那组生效**：fzf-tab 自带的文件名、`git` 子命令即使和你学过的词同名，按 Delete 也什么都不做（不删记忆，也不关面板）。识别办法是给我们的每一行加一个不可见标记（零宽空格），Delete 只认带标记的行。
+- 而且**只在搜索框是空的时候忘词**；你已经在搜索框里敲了过滤字符时，它照旧删搜索字符——不然改错别字就会顺手删掉记忆。想忘词就让搜索框空着（`Ctrl+U` 清空）再按 Delete。
+- 面板关闭时 zle 会响一声，tty7 会把它画成屏幕闪一下；插件把交互式提示音直接关掉了（和早就关掉的补全列表铃声一样）。想留着提示音，就在 `~/.zshrc` 的加载块**之后**加一句 `setopt beep`。
+- 如果你在 `~/.zshrc` 里自己设了 `zstyle ':fzf-tab:*' fzf-bindings`，它会把这里的删除键顶掉；要保留就把绑定一起带上（`bspace:transform:…`，值见 `shell/tern-recall.zsh` 里的 `_tern_recall_fzf_binding`）。
+- 不装 fzf-tab 时，zsh 自带的高亮列表按 Delete 仍然只是删字符：zsh 的菜单键位表（`menuselect`）只认它内置的那几件函数，插件加不进自己的键（实测：绑上去的 widget 完全不触发）。用 **Ctrl+X Ctrl+D** 或上面两条路代替；这个组合键只在 `^X^D` 还没被占用时才绑，你自己绑过就不动它。
+
 ## 排序（可解释的在线学习）
 
 每个 (程序, 子命令路径, 参数) 记三样：用过几次 `n`、失败几次 `f`、距离上次使用的天数 `days`。

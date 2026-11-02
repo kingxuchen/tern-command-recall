@@ -534,6 +534,117 @@ check "update: own commit left untouched" 0 $?
 [[ $out == *不在一条线上* ]]
 check "update: says why it stopped" 0 $?
 
+# 16. Forgetting a word: every context of that program goes, other words,
+# other programs and the rest of the file stay. No tombstone: the next use is
+# learned again, which is exactly the difference between forgetting and banning.
+forget_tmp=$(mktemp -d)
+trap 'rm -rf $tmp $learn_tmp $hist_tmp $rc_tmp $stub $up $forget_tmp' EXIT
+TERN_RECALL_DIR=$forget_tmp
+mkdir -p $forget_tmp/learned
+{
+	row --no-pager 3 0 $now_ts 0.9000 ''
+	row --no-pager 2 0 $now_ts 0.7000 log
+	row --oneline 5 0 $now_ts 0.8000 log
+	row status 1 0 $now_ts 0.6000 ''
+} >$forget_tmp/learned/git
+row --no-pager 1 0 $now_ts 0.5000 '' >$forget_tmp/learned/docker
+row -la 1 0 $now_ts 0.4000 '' >$forget_tmp/learned/ls
+
+_tern_recall_forget git --no-pager
+check "forget: drops the word" 0 $?
+check "forget: no row left in any context" 0 "$(grep -c -- '^--no-pager' $forget_tmp/learned/git)"
+check "forget: other words of the program stay" "--oneline status" \
+	"$(cut -f1 $forget_tmp/learned/git | tr '\n' ' ' | sed 's/ $//')"
+check "forget: same word in another program stays" 1 "$(grep -c -- '^--no-pager' $forget_tmp/learned/docker)"
+check "forget: row order and stats survive" $'status\t1\t0\t'"$now_ts"$'\t0.6000\t' \
+	"$(grep -- '^status' $forget_tmp/learned/git)"
+
+_tern_recall_forget git --rebase
+check "forget: an absent word reports failure" 1 $?
+_tern_recall_forget ../evil status
+check "forget: a path is not a program name" 1 $?
+_tern_recall_forget git 'a b'
+check "forget: a word with a space is refused" 1 $?
+
+_tern_recall_forget ls -la
+check "forget: last word of a program succeeds" 0 $?
+[[ -e $forget_tmp/learned/ls ]]
+check "forget: emptied store loses its file" 1 $?
+
+# The CLI wraps the same function, and says so in one line.
+out=$(recall forget git --oneline 2>&1); st=$?
+check "forget cli: deletes and reports" "0 已忘记 --oneline · git" "$st $out"
+out=$(recall forget git --oneline 2>&1); st=$?
+check "forget cli: a second time is an error" 1 $st
+[[ $out == *'not learned'* || $out == *'没有学到'* ]]
+check "forget cli: says why" 0 $?
+
+# The entry the Tern palette and `scripts/install.sh' call: no shell state needed.
+out=$(zsh "$here/tern-recall.zsh" --forget git status 2>&1); st=$?
+check "forget: headless entry reports the word" "0 forgot git status" "$st $out"
+count_rows() { local n=0; [[ -e $1 ]] && n=$(grep -c -- "^$2" $1); print -r -- $n }
+check "forget: headless entry removed the row" 0 "$(count_rows $forget_tmp/learned/git status)"
+
+# What fzf calls: it may hand over an fzf-tab item (`<display>\2<metadata>', with
+# that picker's own group marker) or a whole `recall' line.
+row --no-pager 3 0 $now_ts 0.9000 '' >$forget_tmp/learned/git
+out=$(_tern_recall_fzf_delete git '·--no-pager'); st=$?
+check "fzf delete: fzf-tab item aborts the panel" "0 abort" "$st $out"
+check "fzf delete: fzf-tab item removed the word" 0 "$(count_rows $forget_tmp/learned/git --no-pager)"
+row --oneline 5 0 $now_ts 0.8000 log >>$forget_tmp/learned/git
+out=$(_tern_recall_fzf_delete git 'git log --oneline'); st=$?
+check "fzf delete: recall line aborts the panel" "0 abort" "$st $out"
+out=$(_tern_recall_fzf_delete git 'git log --oneline'); st=$?
+check "fzf delete: a word that is not learned does nothing" "1 " "$st $out"
+out=$(_tern_recall_take_notice; print -r -- "$REPLY"); st=$?
+check "fzf delete: it left a notice for the prompt" 0 $st
+[[ $out == *'已忘记'* ]]
+check "fzf delete: the notice names the word" 0 $?
+_tern_recall_take_notice
+check "fzf delete: the notice is shown once" 1 $?
+
+# The plain delete key: while the search box is empty it forgets the highlighted
+# row; once a filter is typed it must keep editing the filter instead. Only rows
+# this plugin produced (marked with a zero-width space for fzf-tab) may be
+# forgotten — a `git' subcommand or a file with the same spelling is not ours.
+row --verbose 5 0 $now_ts 0.9000 '' >$forget_tmp/learned/git
+row commit 3 0 $now_ts 0.7000 '' >>$forget_tmp/learned/git
+out=$(_tern_recall_fzf_bspace git $'--verbose\u200b' ''); st=$?
+check "fzf bspace: empty query forgets our row" "0 abort" "$st $out"
+check "fzf bspace: the word is gone" 0 "$(count_rows $forget_tmp/learned/git --verbose)"
+out=$(_tern_recall_fzf_bspace git 'commit' ''); st=$?
+check "fzf bspace: another completer's row does nothing" "0 " "$st $out"
+check "fzf bspace: our same-named row survives" 1 "$(count_rows $forget_tmp/learned/git commit)"
+out=$(_tern_recall_fzf_bspace git 'commit' 'co'); st=$?
+check "fzf bspace: a typed filter still edits" "0 backward-delete-char/eof" "$st $out"
+out=$(_tern_recall_fzf_bspace git 'git commit' '' 1); st=$?
+check "fzf bspace: the recall panel's own list needs no mark" "0 abort" "$st $out"
+check "fzf bspace: it deleted the word from that line" 0 "$(count_rows $forget_tmp/learned/git commit)"
+row --version 4 0 $now_ts 0.8000 '' >$forget_tmp/learned/git
+out=$(zsh "$here/tern-recall.zsh" --fzf-bspace git $'--version\u200b' '' ); st=$?
+check "fzf bspace: headless entry deletes" "0 abort" "$st $out"
+
+# The binding fzf-tab reads: only while this completion found learned words.
+unset TERN_RECALL_FZF_PROG
+_tern_recall_fzf_binding
+check "fzf bind: a placeholder keeps fzf alive without a program" "1 f12:ignore" "${#reply[@]} ${reply[1]}"
+TERN_RECALL_FZF_PROG=git _tern_recall_fzf_binding
+check "fzf bind: one binding, the plain delete key" 1 ${#reply[@]}
+[[ ${reply[1]} == bspace:transform:*'--fzf-bspace git {2} {q}' ]]
+check "fzf bind: it forgets while the filter is empty" 0 $?
+unset TERN_RECALL_FZF_PROG
+
+# The chord's building blocks: the word under the cursor and the program of a
+# plain line (the same rule the completer uses).
+_tern_recall_word_at 'git --ver' 'sion'
+check "chord: word around the cursor" "--version" "$REPLY"
+_tern_recall_word_at 'git ' ''
+check "chord: no word at whitespace" 1 $?
+_tern_recall_line_program 'sudo git push -f'
+check "chord: program of a line" git "$REPLY"
+_tern_recall_line_program 'ls -la'
+check "chord: program is a basename" ls "$REPLY"
+
 print -r -- ""
 if ((fails == 0)); then
 	print -r -- "all checks passed"
