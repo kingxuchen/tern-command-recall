@@ -821,11 +821,28 @@ _tern_recall_install_zshrc() {
     local alt_begin="# >>> command-recall >>>"
     local alt_end="# <<< command-recall <<<"
     local source_line="[ -r \"$script_path\" ] && . \"$script_path\""
+    # v2 adds the Tab-panel wiring: fzf-tab renders the completion list as an
+    # fzf popup, compinit makes completion work at all on bare machines, and
+    # Tern is skipped because it ships its own GUI popup. The marker line lets
+    # a later run upgrade a v1 block in place; blocks that load a wrapper
+    # (a user's own wiring file) are never rewritten.
     local -a block_lines=(
       "$begin_mark"
       "# Tab lists the arguments you actually use across every terminal."
       "# Delete this block to turn the feature off."
       "$source_line"
+      "# Tab 面板：fzf-tab + fzf 渲染弹窗；Tern 里自动跳过（Tern 有自己的 GUI 弹窗）"
+      "# v2: fzf-tab panel"
+      "if (( ! \$+functions[compinit] )); then"
+      "  autoload -Uz compinit"
+      "  compinit"
+      "fi"
+      "if [[ -z \${TERN_COMPLETE-} ]] && (( ! \$+functions[fzf-tab-complete] )) && command -v fzf >/dev/null 2>&1 && [[ -r \$HOME/.fzf-tab/fzf-tab.plugin.zsh ]]; then"
+      "  . \"\$HOME/.fzf-tab/fzf-tab.plugin.zsh\""
+      "  zstyle ':fzf-tab:*' fzf-flags --border=rounded --info=inline-right"
+      "  zstyle ':fzf-tab:*' fzf-pad 4"
+      "  zstyle ':fzf-tab:*' prefix ''"
+      "fi"
       "$end_mark"
     )
 
@@ -841,20 +858,28 @@ _tern_recall_install_zshrc() {
     local -a lines
     lines=( "${(@f)content}" )
 
-    local -i has_block=0 in_block=0 needs_upgrade=0 has_active_ref=0
+    local -i has_block=0 in_block=0 needs_upgrade=0 has_active_ref=0 saw_marker=0 saw_ours=0
     local line quoted_path expanded_path
     for line in "${lines[@]}"; do
       if [[ $line == "$begin_mark" || $line == "$alt_begin" ]]; then
         has_block=1
         in_block=1
+        saw_marker=0
+        saw_ours=0
         continue
       fi
       if (( in_block )); then
         if [[ $line == "$end_mark" || $line == "$alt_end" ]]; then
+          if (( saw_ours && ! saw_marker )); then
+            needs_upgrade=1
+          fi
           in_block=0
           continue
         fi
-        [[ $line == [[:space:]]#\#* || -z ${line//[[:space:]]/} ]] && continue
+        if [[ $line == [[:space:]]#\#* || -z ${line//[[:space:]]/} ]]; then
+          [[ $line == *'v2: fzf-tab panel'* ]] && saw_marker=1
+          continue
+        fi
         if [[ $line == *'$TERN_RECALL_DIR/tern-recall.zsh'* ]]; then
           needs_upgrade=1
         elif [[ $line == *\"*\"* ]]; then
@@ -864,6 +889,7 @@ _tern_recall_install_zshrc() {
           expanded_path=${expanded_path/#\~/$HOME}
           if [[ -r $expanded_path ]]; then
             has_active_ref=1
+            [[ $expanded_path == *tern-recall\.zsh ]] && saw_ours=1
           else
             needs_upgrade=1
           fi

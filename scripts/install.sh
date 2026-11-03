@@ -184,6 +184,43 @@ _sync_tern_plugin() {
   return 1
 }
 
+# The Tab panel needs fzf and fzf-tab; neither is standard equipment. fzf goes
+# in through brew when that exists (macOS), elsewhere the exact command is
+# printed — sudo packages are the user's call. fzf-tab is plain scripts, so it
+# is cloned into ~/.fzf-tab like the reference setup. Both are best-effort:
+# completion itself never depends on them.
+FZF_TAB_DIR="${COMMAND_RECALL_FZF_TAB_DIR:-$HOME/.fzf-tab}"
+FZF_TAB_REPO="${COMMAND_RECALL_FZF_TAB_REPO:-https://github.com/Aloxaf/fzf-tab.git}"
+
+_ensure_panel_deps() {
+  if ! command -v fzf >/dev/null 2>&1; then
+    if [[ "$(uname)" == Darwin ]] && command -v brew >/dev/null 2>&1; then
+      print -r -- "– 没装 fzf，正在用 brew 安装（Tab 面板靠它渲染）……"
+      if brew install --quiet fzf; then
+        print -r -- "✓ fzf 已安装"
+      else
+        print -ru2 -- "! fzf 没装上，手动跑一次：brew install fzf"
+      fi
+    else
+      print -r -- "– 没装 fzf：Tab 面板不会弹出。macOS: brew install fzf，Debian/Ubuntu: sudo apt install fzf，装完新开 Tab"
+    fi
+  fi
+  if [[ ! -r "$FZF_TAB_DIR/fzf-tab.plugin.zsh" ]]; then
+    if command -v git >/dev/null 2>&1; then
+      print -r -- "– 下载 Tab 弹窗组件 fzf-tab：$FZF_TAB_DIR ……"
+      if git clone --depth 1 --quiet "$FZF_TAB_REPO" "$FZF_TAB_DIR"; then
+        print -r -- "✓ fzf-tab 已就绪"
+      else
+        print -ru2 -- "! fzf-tab 没下载成功（网络？），Tab 列表暂时由 zsh 原生渲染，不影响补全内容"
+      fi
+    else
+      print -ru2 -- "! 没有 git，跳过 fzf-tab 下载"
+    fi
+  else
+    git -C "$FZF_TAB_DIR" pull --ff-only --quiet 2>/dev/null || true
+  fi
+}
+
 # Running from a local checkout means "install/update from what you are editing".
 SCRIPT_SOURCE="${(%):-%x}"
 stale=0
@@ -199,6 +236,7 @@ fi
 # every Linux distro, so resolve the interpreter this script is running under.
 zsh_bin=$(builtin command -v zsh 2>/dev/null) || zsh_bin=/bin/zsh
 "$zsh_bin" "$INSTALL_DIR/shell/tern-recall.zsh" --install
+_ensure_panel_deps
 tern_status=0
 _sync_tern_plugin "$INSTALL_DIR" || tern_status=1
 

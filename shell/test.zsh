@@ -735,8 +735,10 @@ check "stranger: missing git stops the install" 1 $st
 
 # A Tern install whose CLI is not on PATH still owns the copy ~/.zshrc sources:
 # the installer refreshes that package copy straight on disk, without .git.
+# ~/.fzf-tab is pre-seeded so the panel-deps step stays off the network.
 mac_home=$up/mac
-mkdir -p "$mac_home/Library/Application Support/Tern/plugins" "$mac_home/scripts"
+mkdir -p "$mac_home/Library/Application Support/Tern/plugins" "$mac_home/scripts" "$mac_home/.fzf-tab"
+print -r -- "# preseeded" > "$mac_home/.fzf-tab/fzf-tab.plugin.zsh"
 cp "${here:h}/scripts/install.sh" "$mac_home/scripts/install.sh"
 out=$(COMMAND_RECALL_REPO="file://$up/origin" COMMAND_RECALL_INSTALL_DIR="$up/mac/plugin" \
 	TERN_RECALL_DIR="$up/mac/data" ZDOTDIR="$up/mac/zdot" HISTFILE="$up/mac/hist" \
@@ -747,6 +749,61 @@ check "ternless cli: the package copy carries the newest code" 0 $?
 [[ -e "$mac_home/Library/Application Support/Tern/plugins/command-recall/.git" ]]
 check "ternless cli: no .git lands in the package" 1 $?
 [[ $out == *'安装版本：'* ]]; check "ternless cli: it reports the installed version" 0 $?
+
+# 18. The generated block is v2 (panel wiring); a v1 block the installer wrote
+# long ago upgrades in place, a wrapper block (the user's own wiring file —
+# this machine's command-recall.zsh) is never rewritten.
+cat > "$rc_tmp/v1_zshrc" <<EOF
+export BEFORE=2
+# >>> Tern command-recall >>>
+[ -r "$here/tern-recall.zsh" ] && . "$here/tern-recall.zsh"
+# <<< Tern command-recall <<<
+export AFTER=2
+EOF
+check "upgrade: a v1 block rewrites in place" "upgraded" "$(_tern_recall_install_zshrc "$rc_tmp/v1_zshrc" "$here/tern-recall.zsh")"
+v2=$(<$rc_tmp/v1_zshrc)
+[[ $v2 == *'export BEFORE=2'* && $v2 == *'export AFTER=2'* ]]
+check "upgrade: surroundings survive the v2 rewrite" 0 $?
+[[ $v2 == *'v2: fzf-tab panel'* && $v2 == *'fzf-tab.plugin.zsh'* ]]
+check "upgrade: the block carries the panel wiring" 0 $?
+sed -n '/>>> Tern command-recall/,/<<< Tern command-recall/p' "$rc_tmp/v1_zshrc" > "$rc_tmp/block_only.zsh"
+out=$(/bin/zsh -fc "ZDOTDIR=$rc_tmp source $rc_tmp/block_only.zsh; print compinit=\${+functions[compinit]} tabfn=\${+functions[fzf-tab-complete]}")
+check "upgrade: sourcing the block initialises compinit" "compinit=1 tabfn=0" "$out"
+
+print -r -- "export WIRE=1" > "$rc_tmp/wrapper.zsh"
+cat > "$rc_tmp/wrap_zshrc" <<EOF
+# >>> Tern command-recall >>>
+[ -r "$rc_tmp/wrapper.zsh" ] && . "$rc_tmp/wrapper.zsh"
+# <<< Tern command-recall <<<
+EOF
+before_wrap=$(<$rc_tmp/wrap_zshrc)
+check "wrapper: a wrapper block stays already-installed" "already-installed" \
+	"$(_tern_recall_install_zshrc "$rc_tmp/wrap_zshrc" "$here/tern-recall.zsh")"
+check "wrapper: byte-for-byte unchanged" "$before_wrap" "$(<$rc_tmp/wrap_zshrc)"
+
+# The installer provisions fzf-tab into HOME when it is missing (fake repo, no
+# network), and does not re-clone when it is already there.
+git init --quiet "$up/fzftab-origin"
+print -r -- "# fake fzf-tab" > "$up/fzftab-origin/fzf-tab.plugin.zsh"
+git -C "$up/fzftab-origin" "${gcfg[@]}" add -A
+git -C "$up/fzftab-origin" "${gcfg[@]}" commit -qm t1
+ft_home=$up/ft
+mkdir -p "$ft_home/scripts" "$ft_home/Library/Application Support/Tern/plugins"
+cp "${here:h}/scripts/install.sh" "$ft_home/scripts/install.sh"
+out=$(COMMAND_RECALL_REPO="file://$up/origin" COMMAND_RECALL_INSTALL_DIR="$up/ft/plugin" \
+	COMMAND_RECALL_FZF_TAB_REPO="file://$up/fzftab-origin" \
+	TERN_RECALL_DIR="$up/ft/data" ZDOTDIR="$up/ft/zdot" HISTFILE="$up/ft/hist" \
+	HOME="$ft_home" PATH="$stub/bin:$PATH" /bin/zsh "$ft_home/scripts/install.sh" 2>&1); st=$?
+check "fzf-tab: install succeeds with provisioning" 0 $st
+[[ -r "$ft_home/.fzf-tab/fzf-tab.plugin.zsh" ]]; check "fzf-tab: cloned into HOME" 0 $?
+grep -q "fzf-tab.plugin.zsh" "$ft_home/zdot/.zshrc"
+check "fzf-tab: the block wires it" 0 $?
+out=$(COMMAND_RECALL_REPO="file://$up/origin" COMMAND_RECALL_INSTALL_DIR="$up/ft/plugin" \
+	COMMAND_RECALL_FZF_TAB_REPO="file://$up/nonexistent-origin" \
+	TERN_RECALL_DIR="$up/ft/data" ZDOTDIR="$up/ft/zdot" HISTFILE="$up/ft/hist" \
+	HOME="$ft_home" PATH="$stub/bin:$PATH" /bin/zsh "$ft_home/scripts/install.sh" 2>&1); st=$?
+check "fzf-tab: a second run stays clean" 0 $st
+[[ -r "$ft_home/.fzf-tab/fzf-tab.plugin.zsh" ]]; check "fzf-tab: an existing clone survives" 0 $?
 
 print -r -- ""
 if ((fails == 0)); then
