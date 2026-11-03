@@ -198,4 +198,4 @@ zsh -f shell/test.zsh         # 全绿即通过（学习引擎、失败惩罚、
 | `scripts/install.sh` | 一键安装 / 更新脚本：对齐 shell 插件的 clone 与 Tern 插件包，重跑即更新 |
 | `shell/test.zsh` | 自动化回归测试套件 |
 | `plugin.toml` | Tern 插件清单（可选，仅挂载 `window.luau`） |
-| `window.luau` | Tern 窗口扩展：首次启动自动配置 `~/.zshrc`、查看已学命令选择器 |
+| `window.luau` | Tern 窗口扩展：首次启动自动配置 `~/.zshrc`、「忘记某条」选择器（全部已学行扁平列出，搜索过滤、选中删除） |

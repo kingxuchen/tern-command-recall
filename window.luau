@@ -3,7 +3,7 @@
 --
 -- The zsh plugin (`shell/tern-recall.zsh`) is the sole learner and completer
 -- across every terminal (Ghostty, Tern, tty7, Otty, iTerm2). This file only
--- exposes Tern command-palette shortcuts to inspect the shared store or copy
+-- exposes Tern command-palette shortcuts to forget learned rows or copy
 -- the `.zshrc` source line.
 
 local function dataDir()
@@ -24,10 +24,7 @@ local LEARNED = DATA .. "/learned"
 local ZSHRC_MARK = DATA .. "/zshrc-configured"
 local SHELL_FILE = tern.plugin.dir .. "/shell/tern-recall.zsh"
 local SHELL_LINE = '[ -r "' .. SHELL_FILE .. '" ] && . "' .. SHELL_FILE .. '"'
--- Rows one program shows in the picker.
-local PICK_ROWS = 40
-
-local function readRows(program, limit)
+local function readRows(program)
 	local path = LEARNED .. "/" .. program
 	if not tern.fs.exists(path) then
 		return {}
@@ -42,34 +39,9 @@ local function readRows(program, limit)
 				context = context or "",
 				line = program .. (context ~= "" and (" " .. context) or "") .. " " .. token,
 			})
-			if limit and #rows >= limit then
-				break
-			end
 		end
 	end
 	return rows
-end
-
--- Programs the store has learned, with their three best rows as a preview.
-local function programs()
-	if not tern.fs.exists(LEARNED) then
-		return {}
-	end
-	local items = {}
-	for _, name in tern.fs.list(LEARNED) do
-		local rows = readRows(name, 3)
-		if #rows > 0 then
-			local top = {}
-			for _, row in rows do
-				table.insert(top, row.token)
-			end
-			table.insert(items, { label = name, detail = table.concat(top, "  ") })
-		end
-	end
-	table.sort(items, function(a, b)
-		return a.label < b.label
-	end)
-	return items
 end
 
 -- Every learned row in the store across all programs, programs alphabetical,
@@ -85,7 +57,7 @@ local function allRows()
 	table.sort(names)
 	local rows = {}
 	for _, name in names do
-		for _, row in readRows(name, nil) do
+		for _, row in readRows(name) do
 			table.insert(rows, {
 				prog = name,
 				token = row.token,
@@ -96,40 +68,6 @@ local function allRows()
 	end
 	return rows
 end
-
-tern.command({
-	id = "show",
-	title = "Command Recall: 查看已学命令",
-	icon = "sparkle",
-	group = "Command Recall",
-	run = function(cx)
-		local items = programs()
-		if #items == 0 then
-			cx:toast("info", "还没有学到命令", "在终端里敲几条命令，再按 Tab 看看")
-			return
-		end
-		cx:pick({ items = items, placeholder = "选一个命令" }):next(function(chosen)
-			if not chosen then
-				return
-			end
-			local picks = {}
-			for _, row in readRows(chosen.label, PICK_ROWS) do
-				table.insert(picks, { label = row.line, insert = row.line })
-			end
-			if #picks == 0 then
-				return
-			end
-			cx:pick({ items = picks, placeholder = "插入这条命令（不回车）", action = "insert" }):next(
-				function(pick)
-					local pane = cx.session:focused()
-					if pick and pane then
-						cx:run(pane, pick.insert)
-					end
-				end
-			)
-		end)
-	end,
-})
 
 local function forgetRow(prog, token, context)
 	tern.process.run(
