@@ -42,6 +42,10 @@ _sync_shell_clone() {
       exit 1
     fi
     mkdir -p "${dir:h}"
+    if ! command -v git >/dev/null 2>&1; then
+      print -ru2 -- "✗ 下载代码需要 git：先装好 git（macOS: brew install git，Debian/Ubuntu: sudo apt install git）再重跑"
+      exit 1
+    fi
     if ! git clone --depth 1 --quiet "$REPO_URL" "$dir"; then
       print -ru2 -- "✗ 下载代码失败（网络不通或仓库地址不对）：$REPO_URL"
       exit 1
@@ -172,7 +176,10 @@ elif ! _sync_shell_clone "$INSTALL_DIR"; then
   stale=1
 fi
 
-/bin/zsh "$INSTALL_DIR/shell/tern-recall.zsh" --install
+# The --install entry needs a fresh zsh process; /bin/zsh does not exist on
+# every Linux distro, so resolve the interpreter this script is running under.
+zsh_bin=$(builtin command -v zsh 2>/dev/null) || zsh_bin=/bin/zsh
+"$zsh_bin" "$INSTALL_DIR/shell/tern-recall.zsh" --install
 tern_status=0
 _sync_tern_plugin "$INSTALL_DIR" || tern_status=1
 

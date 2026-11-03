@@ -720,6 +720,19 @@ check "chord: program of a line" git "$REPLY"
 _tern_recall_line_program 'ls -la'
 check "chord: program is a basename" ls "$REPLY"
 
+# 17. A stranger's machine: no checkout to run from, a restricted PATH. The two
+# failures a stranger can hit before git even runs must name the actual problem:
+# a missing git (the clone needs it) and an unset HOME (install paths derive
+# from it). /bin alone keeps git off PATH while the stub's #!/bin/sh still runs.
+mkdir -p "$up/stranger/scripts"
+cp "${here:h}/scripts/install.sh" "$up/stranger/scripts/install.sh"
+out=$(COMMAND_RECALL_REPO="file://$up/origin" COMMAND_RECALL_INSTALL_DIR="$up/stranger/plugin" \
+	TERN_RECALL_DIR="$up/stranger/data" ZDOTDIR="$up/stranger/zdot" HISTFILE="$up/stranger/hist" \
+	PATH="$stub/bin:/bin" /bin/zsh "$up/stranger/scripts/install.sh" 2>&1); st=$?
+check "stranger: missing git stops the install" 1 $st
+[[ $out == *'需要 git'* ]]; check "stranger: the git failure names git" 0 $?
+[[ -e $up/stranger/plugin/.git ]]; check "stranger: nothing cloned without git" 1 $?
+
 print -r -- ""
 if ((fails == 0)); then
 	print -r -- "all checks passed"
