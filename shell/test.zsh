@@ -733,6 +733,21 @@ check "stranger: missing git stops the install" 1 $st
 [[ $out == *'需要 git'* ]]; check "stranger: the git failure names git" 0 $?
 [[ -e $up/stranger/plugin/.git ]]; check "stranger: nothing cloned without git" 1 $?
 
+# A Tern install whose CLI is not on PATH still owns the copy ~/.zshrc sources:
+# the installer refreshes that package copy straight on disk, without .git.
+mac_home=$up/mac
+mkdir -p "$mac_home/Library/Application Support/Tern/plugins" "$mac_home/scripts"
+cp "${here:h}/scripts/install.sh" "$mac_home/scripts/install.sh"
+out=$(COMMAND_RECALL_REPO="file://$up/origin" COMMAND_RECALL_INSTALL_DIR="$up/mac/plugin" \
+	TERN_RECALL_DIR="$up/mac/data" ZDOTDIR="$up/mac/zdot" HISTFILE="$up/mac/hist" \
+	HOME="$mac_home" PATH="/usr/bin:/bin" /bin/zsh "$mac_home/scripts/install.sh" 2>&1); st=$?
+check "ternless cli: install succeeds" 0 $st
+grep -q "fzf-row-delete" "$mac_home/Library/Application Support/Tern/plugins/command-recall/shell/tern-recall.zsh"
+check "ternless cli: the package copy carries the newest code" 0 $?
+[[ -e "$mac_home/Library/Application Support/Tern/plugins/command-recall/.git" ]]
+check "ternless cli: no .git lands in the package" 1 $?
+[[ $out == *'安装版本：'* ]]; check "ternless cli: it reports the installed version" 0 $?
+
 print -r -- ""
 if ((fails == 0)); then
 	print -r -- "all checks passed"

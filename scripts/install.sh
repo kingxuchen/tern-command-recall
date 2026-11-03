@@ -105,25 +105,30 @@ _sync_shell_clone() {
   return 0
 }
 
-# Refresh the Tern package from that same tree. No Tern on this machine, a linked
-# developer checkout, or a missing manifest all skip instead of breaking the shell side.
+# Refresh the Tern package from that same tree. The CLI is preferred, but a
+# Tern install whose CLI is not on PATH (or whose daemon is down) still owns
+# the copy ~/.zshrc actually sources — that copy is refreshed on disk too,
+# or the machine keeps running the old plugin however new the clone is.
 _sync_tern_plugin() {
   local src=$1
   [[ -f "$src/plugin.toml" ]] || return 0
-  if ! command -v tern >/dev/null 2>&1; then
-    print -r -- "– 这台机器没有 tern 命令，只更新了 shell 插件"
-    return 0
-  fi
 
-  local id pdir
+  local id
   id=$(awk -F'"' '/^[[:space:]]*id[[:space:]]*=/ { print $2; exit }' "$src/plugin.toml")
   if [[ -z $id ]]; then
     print -ru2 -- "! plugin.toml 里读不到 id，跳过 Tern 插件更新"
     return 0
   fi
-  pdir=$(tern plugin dir 2>/dev/null) || pdir=''
+
+  local pdir=''
+  if command -v tern >/dev/null 2>&1; then
+    pdir=$(tern plugin dir 2>/dev/null) || pdir=''
+  fi
+  if [[ -z $pdir && -d "$HOME/Library/Application Support/Tern/plugins" ]]; then
+    pdir="$HOME/Library/Application Support/Tern/plugins"
+  fi
   if [[ -z $pdir ]]; then
-    print -ru2 -- "! tern plugin dir 没返回路径，跳过 Tern 插件更新"
+    print -r -- "– 这台机器没有 Tern，只更新了 shell 插件"
     return 0
   fi
 
@@ -152,17 +157,31 @@ _sync_tern_plugin() {
     fi
   fi
 
-  local install_out
-  if install_out=$(tern plugin install "$src" --force 2>&1); then
-    print -r -- "✓ Tern 插件已更新：$pdir/$id"
+  if command -v tern >/dev/null 2>&1; then
+    local install_out
+    if install_out=$(tern plugin install "$src" --force 2>&1); then
+      print -r -- "✓ Tern 插件已更新：$pdir/$id"
+      [[ -n $stage ]] && rm -rf "${stage:h}"
+      return 0
+    fi
+    print -ru2 -- "! tern plugin install 没成功（daemon 没在跑？），改为直接写盘：${install_out:-未知错误}"
+  fi
+
+  # Direct disk refresh: new terminal tabs source this copy immediately; the
+  # Tern window half picks it up when Tern restarts.
+  local done_msg="✓ Tern 插件已更新（新开 Tab 生效，Tern 窗口侧重启后生效）：$pdir/$id"
+  if command -v rsync >/dev/null 2>&1; then
+    if mkdir -p "$pdir" && rsync -a --delete --exclude=.git "$src/" "$pdir/$id/"; then
+      print -r -- "$done_msg"
+      [[ -n $stage ]] && rm -rf "${stage:h}"
+      return 0
+    fi
+    print -ru2 -- "✗ 直接写盘也失败了（$pdir/$id），shell 插件不受影响"
   else
-    print -ru2 -- "✗ Tern 插件更新失败（shell 插件不受影响）：${install_out:-未知错误}"
-    print -ru2 -- "  手动重试：tern plugin install \"$1\" --force"
-    [[ -n $stage ]] && rm -rf "${stage:h}"
-    return 1
+    print -ru2 -- "✗ 需要 rsync 才能刷新 Tern 插件副本（shell 插件不受影响）"
   fi
   [[ -n $stage ]] && rm -rf "${stage:h}"
-  return 0
+  return 1
 }
 
 # Running from a local checkout means "install/update from what you are editing".
@@ -184,5 +203,14 @@ tern_status=0
 _sync_tern_plugin "$INSTALL_DIR" || tern_status=1
 
 print -r -- "✓ Command Recall 就绪：$INSTALL_DIR"
+print -r -- "  安装版本：$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || print 未知)"
+local_entry=$(grep -m1 'tern-recall\.zsh' "${ZDOTDIR:-$HOME}/.zshrc" 2>/dev/null) || local_entry=''
+if [[ -n $local_entry ]]; then
+  entry_path=${local_entry#*\"}
+  print -r -- "  shell 加载入口：${entry_path%%\"*}"
+fi
+if ! command -v fzf >/dev/null 2>&1; then
+  print -r -- "– 没装 fzf：Tab 补全照常可用，但 recall 与 Tab 弹窗的交互面板不会弹出（brew install fzf 或 sudo apt install fzf，装完新开 Tab）"
+fi
 print -r -- "  新开一个 Tab（或先 source ~/.zshrc）就能在 Ghostty、Otty、tty7、Tern、iTerm2 生效"
 exit $(( tern_status || stale ))
