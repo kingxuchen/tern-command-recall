@@ -72,6 +72,31 @@ local function programs()
 	return items
 end
 
+-- Every learned row in the store across all programs, programs alphabetical,
+-- each program's rows in stored (score) order.
+local function allRows()
+	if not tern.fs.exists(LEARNED) then
+		return {}
+	end
+	local names = {}
+	for _, name in tern.fs.list(LEARNED) do
+		table.insert(names, name)
+	end
+	table.sort(names)
+	local rows = {}
+	for _, name in names do
+		for _, row in readRows(name, nil) do
+			table.insert(rows, {
+				prog = name,
+				token = row.token,
+				context = row.context,
+				line = name .. (row.context ~= "" and (" " .. row.context) or "") .. " " .. row.token,
+			})
+		end
+	end
+	return rows
+end
+
 tern.command({
 	id = "show",
 	title = "Command Recall: 查看已学命令",
@@ -106,9 +131,9 @@ tern.command({
 	end,
 })
 
-local function forgetToken(prog, token)
+local function forgetRow(prog, token, context)
 	tern.process.run(
-		{ "/bin/zsh", SHELL_FILE, "--forget", prog, token },
+		{ "/bin/zsh", SHELL_FILE, "--forget", prog, token, context },
 		{ timeout_ms = 5000 },
 		function(res, cx)
 			if not cx then
@@ -116,48 +141,44 @@ local function forgetToken(prog, token)
 			end
 			local out = (res and res.stdout or "")
 			if string.match(out, "^forgot") then
-				cx:toast("info", "已忘记 " .. token, prog)
+				cx:toast("info", "已忘记 " .. (context ~= "" and (context .. " ") or "") .. token, prog)
 			else
-				cx:toast("error", "没删掉", "这条已经删过了，或者程序名不合法")
+				cx:toast("error", "没删掉", "这一行已经删过了，或者程序名不合法")
 			end
 		end
 	)
 end
 
--- Tern's own Tab popup keeps the highlighted row to itself (the completion
--- protocol only returns the accepted word), so forgetting goes through the
--- palette picker instead of a key inside the popup.
+-- The flat picker: every learned row of every program, `program [context]
+-- token'. Tern filters on the label as you type, so one search reaches from
+-- the command down to the option; the selected row is the one that goes — the
+-- same word under another context survives.
 tern.command({
 	id = "forget",
 	title = "Command Recall: 忘记某条",
 	icon = "sparkle",
 	group = "Command Recall",
 	run = function(cx)
-		local items = programs()
-		if #items == 0 then
+		local rows = allRows()
+		if #rows == 0 then
 			cx:toast("info", "还没有学到命令", "在终端里敲几条命令，再按 Tab 看看")
 			return
 		end
-		cx:pick({ items = items, placeholder = "选一个命令" }):next(function(chosen)
-			if not chosen then
+		local picks = {}
+		for _, row in rows do
+			table.insert(picks, { label = row.line })
+		end
+		cx:pick({ items = picks, placeholder = "搜命令、子命令或选项，选中即忘记" }):next(function(pick)
+			if not pick then
 				return
 			end
-			local picks = {}
-			for _, row in readRows(chosen.label, PICK_ROWS) do
-				table.insert(picks, { label = row.line })
+			local line = pick.label
+			local prog = string.match(line, "^(%S+)")
+			local token = string.match(line, "(%S+)$")
+			local context = string.match(line, "^%S+%s+(.-)%s+%S+$") or ""
+			if prog and token then
+				forgetRow(prog, token, context)
 			end
-			if #picks == 0 then
-				return
-			end
-			cx:pick({ items = picks, placeholder = "选一条忘记；同名的词在这个命令里一起删" }):next(function(pick)
-				if not pick then
-					return
-				end
-				local token = string.match(pick.label, "(%S+)$")
-				if token then
-					forgetToken(chosen.label, token)
-				end
-			end)
 		end)
 	end,
 })

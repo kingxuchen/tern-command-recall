@@ -420,13 +420,17 @@ _tern_recall_line_program() {
 }
 
 # Forget one word of one program: every context goes, other words and other
-# programs stay. Same per-program lock and atomic replace as the learner, so a
-# pane that is learning at the same moment cannot resurrect the row. Fails when
-# the store holds no such word; an emptied store loses its file.
+# programs stay. With a third argument, only the row whose context equals it
+# goes — an empty third argument names the program's top-level rows. Same
+# per-program lock and atomic replace as the learner, so a pane that is
+# learning at the same moment cannot resurrect the row. Fails when the store
+# holds no such row; an emptied store loses its file.
 _tern_recall_forget() {
   emulate -L zsh
   local prog=$1 tok=$2
   _tern_recall_is_name "$prog" && _tern_recall_interesting "$tok" || return 1
+  local -i by_row=$(( $# >= 3 ))
+  local want_ctx=${3-}
   local file="$TERN_RECALL_DIR/learned/$prog"
   [[ -r $file ]] || return 1
 
@@ -440,8 +444,11 @@ _tern_recall_forget() {
     while IFS= read -r line; do
       [[ -n $line ]] || continue
       if [[ $line == "$tok" || $line == "$tok"$'\t'* ]]; then
-        (( dropped++ ))
-        continue
+        # The context is the row's last field, and holds no tab itself.
+        if (( ! by_row )) || [[ ${line##*$'\t'} == "$want_ctx" ]]; then
+          (( dropped++ ))
+          continue
+        fi
       fi
       keep+=("$line")
     done < "$file"
@@ -506,6 +513,56 @@ _tern_recall_fzf_bspace() {
   # completers show (files, `git' subcommands) gets no action and no panel close.
   [[ -n $own || $sel == *$'\u200b' ]] || return 0
   if _tern_recall_fzf_delete "$prog" "$sel"; then
+    return 0
+  fi
+  builtin print -r -- 'backward-delete-char/eof'
+}
+
+# One displayed row of the flat `recall' panel: `program [context] token'.
+# Splits it into _tern_recall_row_prog/_ctx/_tok, the token stripped of any
+# picker decoration. Fails when either end is missing.
+_tern_recall_row_parts() {
+  local sel=${1-}
+  local tok=${sel##*[[:space:]]}
+  tok=${tok##[^[:alnum:]_.,:@+-]}
+  tok=${tok%$'\u200b'}
+  local prog=${sel%%[[:space:]]*}
+  [[ -n $tok && -n $prog ]] || return 1
+  _tern_recall_row_prog=$prog
+  _tern_recall_row_tok=$tok
+  _tern_recall_row_ctx=${sel#"$prog"[[:space:]]}
+  if [[ $_tern_recall_row_ctx == *[[:space:]]"$tok" ]]; then
+    # A context exists: it is everything before the final ` token'.
+    _tern_recall_row_ctx=${_tern_recall_row_ctx%[[:space:]]"$tok"}
+  else
+    _tern_recall_row_ctx=''
+  fi
+}
+
+# `--fzf-row-delete <selected line>`: what the flat `recall' panel's Delete key
+# runs. The row itself names program, context and token, so exactly that row
+# goes — the same word under another context survives. Prints `abort' only
+# after a real deletion, so the panel closes for a forgotten row alone.
+_tern_recall_fzf_row_delete() {
+  emulate -L zsh
+  _tern_recall_row_parts "${1-}" || return 1
+  _tern_recall_is_name "$_tern_recall_row_prog" || return 1
+  _tern_recall_forget "$_tern_recall_row_prog" "$_tern_recall_row_tok" "$_tern_recall_row_ctx" || return 1
+  _tern_recall_notice "已忘记 $_tern_recall_row_tok · $_tern_recall_row_prog${_tern_recall_row_ctx:+ $_tern_recall_row_ctx}"
+  builtin print -r -- abort
+}
+
+# The flat `recall' panel's physical delete key, the same split as the
+# completion panel's: a typed filter keeps editing, an empty one forgets the
+# highlighted row.
+_tern_recall_fzf_row_bspace() {
+  emulate -L zsh
+  local query=${2-}
+  if [[ -n $query ]]; then
+    builtin print -r -- 'backward-delete-char/eof'
+    return 0
+  fi
+  if _tern_recall_fzf_row_delete "${1-}"; then
     return 0
   fi
   builtin print -r -- 'backward-delete-char/eof'
@@ -651,9 +708,16 @@ recall() {
   fi
   if [[ ${1-} == forget ]]; then
     local f_prog=${2-} f_tok=${3-}
-    if _tern_recall_forget "$f_prog" "$f_tok"; then
-      builtin print -r -- "已忘记 $f_tok · $f_prog"
-      return 0
+    if (( $# >= 4 )); then
+      if _tern_recall_forget "$f_prog" "$f_tok" "${4-}"; then
+        builtin print -r -- "已忘记 $f_tok · $f_prog${4:+ $4}"
+        return 0
+      fi
+    else
+      if _tern_recall_forget "$f_prog" "$f_tok"; then
+        builtin print -r -- "已忘记 $f_tok · $f_prog"
+        return 0
+      fi
     fi
     builtin print -ru2 -- "recall: $f_prog 里没有学到 $f_tok"
     return 1
@@ -701,13 +765,30 @@ recall() {
   done
 
   if [[ ${1-} != --list && -o interactive && -t 0 && -t 1 ]] && command -v fzf >/dev/null 2>&1; then
-      local chosen_prog chosen_line
-    chosen_prog=$(builtin print -rl -- "${summary[@]}" | fzf --delimiter=$'\t' --with-nth=1,2 --prompt="选一个命令 > ") || return 0
-    chosen_prog=${chosen_prog%%$'\t'*}
-    [[ -n $chosen_prog ]] || return 0
-    chosen_line=$(recall "$chosen_prog" | fzf --prompt="插入这条命令 > " \
-      --bind "bspace:transform:${(q)_tern_recall_self} --fzf-bspace ${(q)chosen_prog} {} {q} 1" \
-      --bind "delete:transform:${(q)_tern_recall_self} --fzf-delete ${(q)chosen_prog} {}") || return 0
+    # One flat panel over every learned row of every program, `program
+    # [context] token', best first within a program: typing reaches the token,
+    # Enter inserts the line, Delete forgets exactly the highlighted row.
+    # Reuses the summary loop's locals (f, name, r_*): re-declaring them here
+    # would make zsh print each one's current value — `local name' lists an
+    # existing parameter instead of staying silent.
+    local -a lines=()
+    for f in "${(@o)files}"; do
+      name=${f:t}
+      while IFS=$'\t' read -r r_tok r_u r_f r_age r_score r_ctx; do
+        [[ -n $r_tok ]] || continue
+        if [[ -n $r_ctx ]]; then
+          lines+=("$name $r_ctx $r_tok")
+        else
+          lines+=("$name $r_tok")
+        fi
+      done < "$f"
+    done
+    (( ${#lines[@]} )) || return 0
+    local chosen_line
+    chosen_line=$(builtin print -rl -- "${lines[@]}" | fzf \
+      --prompt='搜命令/子命令/选项，Enter 插入 · Delete 忘记 > ' \
+      --bind "bspace:transform:${(q)_tern_recall_self} --fzf-row-bspace {} {q}" \
+      --bind "delete:transform:${(q)_tern_recall_self} --fzf-row-delete {}") || return 0
     [[ -n $chosen_line ]] && builtin print -z -- "$chosen_line"
     return 0
   fi
@@ -848,15 +929,25 @@ if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --install ]]; then
   [[ -e "$TERN_RECALL_DIR/history-imported" ]] || _tern_recall_import_history
   exit 0
 fi
-# Same entry the Tern window plugin calls through `tern.process.run'.
+# Same entry the Tern window plugin calls through `tern.process.run'. A fourth
+# argument names the context: exactly that row goes instead of every context.
 if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --forget ]]; then
-  _tern_recall_forget "${2-}" "${3-}" || exit 1
+  if (( $# >= 4 )); then
+    _tern_recall_forget "${2-}" "${3-}" "${4-}" || exit 1
+  else
+    _tern_recall_forget "${2-}" "${3-}" || exit 1
+  fi
   builtin print -r -- "forgot ${2-} ${3-}"
   exit 0
 fi
-# Same entry the fzf binds call: prints `abort' only on a real deletion.
-if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --fzf-delete ]]; then
-  _tern_recall_fzf_delete "${2-}" "${3-}" || exit 1
+# Same entries the flat `recall' panel's fzf binds call: prints `abort' only on
+# a real deletion.
+if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --fzf-row-delete ]]; then
+  _tern_recall_fzf_row_delete "${2-}" || exit 1
+  exit 0
+fi
+if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --fzf-row-bspace ]]; then
+  _tern_recall_fzf_row_bspace "${2-}" "${3-}"
   exit 0
 fi
 if [[ ${ZSH_EVAL_CONTEXT-} == toplevel && ${1-} == --fzf-bspace ]]; then

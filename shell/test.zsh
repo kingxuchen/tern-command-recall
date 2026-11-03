@@ -624,6 +624,81 @@ row --version 4 0 $now_ts 0.8000 '' >$forget_tmp/learned/git
 out=$(zsh "$here/tern-recall.zsh" --fzf-bspace git $'--version\u200b' '' ); st=$?
 check "fzf bspace: headless entry deletes" "0 abort" "$st $out"
 
+# 16c. Forgetting one exact row: a third argument names the context, so the
+# same word under another context — and every other row — survives. This is
+# what the flat `recall' panel and the Tern palette delete: the row the user
+# found by searching, `program [context] token', nothing else.
+_tern_recall_row_parts 'git push origin'
+check "row parts: three words" "git push origin" "$_tern_recall_row_prog $_tern_recall_row_ctx $_tern_recall_row_tok"
+_tern_recall_row_parts 'git commit'
+check "row parts: two words, empty context" "git  commit" "$_tern_recall_row_prog $_tern_recall_row_ctx $_tern_recall_row_tok"
+_tern_recall_row_parts 'git push origin HEAD'
+check "row parts: two-word context" "git push origin HEAD" "$_tern_recall_row_prog $_tern_recall_row_ctx $_tern_recall_row_tok"
+_tern_recall_row_parts ''
+check "row parts: an empty row fails" 1 $?
+
+{
+	row --no-pager 3 0 $now_ts 0.9000 ''
+	row --no-pager 2 0 $now_ts 0.7000 log
+	row --oneline 5 0 $now_ts 0.8000 log
+	row status 1 0 $now_ts 0.6000 ''
+} >$forget_tmp/learned/git
+_tern_recall_forget git --no-pager log
+check "forget row: drops only that context's row" 1 "$(grep -c -- '^--no-pager' $forget_tmp/learned/git)"
+check "forget row: the surviving twin is the top-level one" 1 "$(grep -c -- $'^--no-pager\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t$' $forget_tmp/learned/git)"
+check "forget row: other rows untouched" 2 "$(grep -c -- '^--oneline\|^status' $forget_tmp/learned/git)"
+_tern_recall_forget git status ''
+check "forget row: an empty context names the top-level rows" 0 "$(grep -c -- '^status' $forget_tmp/learned/git)"
+check "forget row: the log row survives an empty-context forget" 1 "$(grep -c $'\tlog$' $forget_tmp/learned/git)"
+_tern_recall_forget git --no-pager compose
+check "forget row: an absent context reports failure" 1 $?
+
+out=$(_tern_recall_fzf_row_delete 'git log --oneline'); st=$?
+check "fzf row delete: the found row goes" "0 abort" "$st $out"
+check "fzf row delete: only that row went" 1 "$(grep -c -- '^--no-pager' $forget_tmp/learned/git)"
+out=$(_tern_recall_fzf_row_delete 'git log --oneline'); st=$?
+check "fzf row delete: a row already gone does nothing" "1 " "$st $out"
+out=$(_tern_recall_fzf_row_delete '../evil status'); st=$?
+check "fzf row delete: a path is not a program name" "1 " "$st $out"
+out=$(_tern_recall_fzf_row_delete 'git --no-pager'); st=$?
+check "fzf row delete: a two-word row forgets the top-level token" "0 abort" "$st $out"
+[[ -e $forget_tmp/learned/git ]]; check "fzf row delete: emptied store loses its file" 1 $?
+out=$(_tern_recall_take_notice; print -r -- "$REPLY"); st=$?
+[[ $out == *'已忘记 --no-pager · git'* ]]
+check "fzf row delete: the notice names token and program" 0 $?
+
+{
+	row commit 3 0 $now_ts 0.7000 ''
+	row origin 2 0 $now_ts 0.6000 push
+} >$forget_tmp/learned/git
+out=$(_tern_recall_fzf_row_bspace 'git push origin' ''); st=$?
+check "fzf row bspace: empty query forgets the row" "0 abort" "$st $out"
+check "fzf row bspace: the row is gone, the other row untouched" "0 1" \
+	"$(count_rows $forget_tmp/learned/git origin) $(count_rows $forget_tmp/learned/git commit)"
+out=$(_tern_recall_fzf_row_bspace 'git commit' 'co'); st=$?
+check "fzf row bspace: a typed filter still edits" "0 backward-delete-char/eof" "$st $out"
+check "fzf row bspace: the row survives the edit" 1 "$(count_rows $forget_tmp/learned/git commit)"
+out=$(zsh "$here/tern-recall.zsh" --fzf-row-delete 'git commit'); st=$?
+check "fzf row delete: headless entry deletes" "0 abort" "$st $out"
+{
+	row push 2 0 $now_ts 0.6000 origin
+	row -f 1 0 $now_ts 0.4000 ''
+} >$forget_tmp/learned/git
+out=$(zsh "$here/tern-recall.zsh" --forget git push origin 2>&1); st=$?
+check "forget row: headless entry reports the word" "0 forgot git push" "$st $out"
+check "forget row: headless entry removed only that row" 1 "$(count_rows $forget_tmp/learned/git -f)"
+
+{
+	row -f 1 0 $now_ts 0.4000 ''
+	row -f 2 0 $now_ts 0.5000 push
+} >$forget_tmp/learned/git
+out=$(recall forget git -f push 2>&1); st=$?
+check "forget cli row: deletes and reports the row" "0 已忘记 -f · git push" "$st $out"
+check "forget cli row: the other context survives" 1 "$(count_rows $forget_tmp/learned/git -f)"
+out=$(recall forget git -f 2>&1); st=$?
+check "forget cli: without a context the word goes everywhere" "0 已忘记 -f · git" "$st $out"
+[[ -e $forget_tmp/learned/git ]]; check "forget cli: emptied store loses its file" 1 $?
+
 # The binding fzf-tab reads: only while this completion found learned words.
 unset TERN_RECALL_FZF_PROG
 _tern_recall_fzf_binding
